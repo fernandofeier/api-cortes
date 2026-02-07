@@ -217,6 +217,7 @@ X-API-Key: sua-api-key
   "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
   "gemini_prompt_instruction": "Foque em momentos engracados",
   "options": {
+    "layout": "blur_zoom",
     "max_clips": 3,
     "zoom_level": 1400,
     "fade_duration": 1.0,
@@ -241,12 +242,22 @@ X-API-Key: sua-api-key
 
 | Campo | Tipo | Default | Min | Max | Descricao |
 |-------|------|---------|-----|-----|-----------|
+| `layout` | string | `blur_zoom` | - | - | Preset de layout do video (veja tabela abaixo) |
 | `max_clips` | int | 1 | 1 | 10 | Quantidade de cortes (multi-clip requer video > 10 min) |
-| `zoom_level` | int | 1400 | 500 | 3000 | Largura do zoom no foreground (pixels) |
+| `zoom_level` | int | 1400 | 500 | 3000 | Largura do zoom no foreground (pixels, so aplica no layout `blur_zoom`) |
 | `fade_duration` | float | 1.0 | 0.0 | 5.0 | Duracao da transicao entre segmentos (segundos) |
 | `width` | int | 1080 | 360 | 3840 | Largura do video de saida |
 | `height` | int | 1920 | 360 | 3840 | Altura do video de saida |
 | `mirror` | bool | false | - | - | Espelhar video horizontalmente (anti-copyright) |
+
+**Layouts disponiveis:**
+
+| Layout | Descricao |
+|--------|-----------|
+| `blur_zoom` | **Padrao.** Fundo blur + video com zoom centralizado + formato vertical 9:16 |
+| `vertical` | Corte vertical simples do centro do video, sem blur |
+| `horizontal` | Mantem o formato original do video, sem alterar resolucao |
+| `blur` | Fundo blur + video original centralizado (sem zoom) |
 
 **Resposta 202:**
 ```json
@@ -254,6 +265,79 @@ X-API-Key: sua-api-key
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "accepted",
   "message": "Video processing started. Results will be sent to https://..."
+}
+```
+
+### POST /v1/manual-cut
+
+Corte manual de video — sem IA, voce envia os timestamps exatos. Cada clip vira um video separado no Drive.
+
+**Headers:**
+```
+Content-Type: application/json
+X-API-Key: sua-api-key
+```
+
+**Body:**
+```json
+{
+  "file_id": "1ABC123def456",
+  "webhook_url": "https://seu-servidor.com/webhook",
+  "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
+  "clips": [
+    {"start": 40, "end": 60, "title": "Momento engracado"},
+    {"start": 120, "end": 150}
+  ],
+  "options": {
+    "layout": "blur_zoom",
+    "mirror": false
+  }
+}
+```
+
+**Campos do body:**
+
+| Campo | Tipo | Obrigatorio | Descricao |
+|-------|------|-------------|-----------|
+| `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa) |
+| `webhook_url` | string | Sim | URL para receber o resultado via POST |
+| `drive_folder_id` | string | Nao | Pasta no Drive para upload. Se omitido, salva na raiz |
+| `clips` | array | Sim | Array de clips com timestamps (1 a 20 clips) |
+| `clips[].start` | float | Sim | Inicio do clip em segundos |
+| `clips[].end` | float | Sim | Fim do clip em segundos |
+| `clips[].title` | string | Nao | Titulo opcional do clip |
+| `options` | object | Nao | Opcoes de layout, mirror, etc (mesmas do `/v1/process`) |
+
+**Resposta 202:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "accepted",
+  "message": "Manual cut started (2 clips). Results will be sent to https://..."
+}
+```
+
+**Webhook de sucesso:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "completed",
+  "original_file_id": "1ABC123def456",
+  "result": {
+    "total_clips": 2,
+    "generated_clips": [
+      {
+        "clip_number": 1,
+        "title": "Momento engracado",
+        "file_id": "1XYZ789...",
+        "file_name": "clip-550e8400-1.mp4",
+        "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",
+        "start": 40,
+        "end": 60,
+        "output_size_mb": 3.21
+      }
+    ]
+  }
 }
 ```
 

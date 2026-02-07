@@ -20,6 +20,7 @@ class Segment:
 @dataclass
 class VideoOptions:
     """Processing options passed from the API request."""
+    layout: str = "blur_zoom"  # blur_zoom | vertical | horizontal | blur
     zoom_level: int = 1400
     fade_duration: float = 1.0
     width: int = 1080
@@ -107,22 +108,21 @@ def _build_fade_filters(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: VISUAL STYLE (Mobile 9:16 - blur bg + zoom fg + overlay)
+# Phase 3: VISUAL STYLE — layout-based dispatch
 # ---------------------------------------------------------------------------
 
-def _build_visual_style_filter(
-    video_label: str,
-    opts: VideoOptions,
-) -> tuple[str, str]:
-    """
-    Apply the 9:16 mobile visual style:
-      1. (optional) hflip for mirror
-      2. split into bg_src and fg_src
-      3. Background: scale small -> boxblur -> scale large (CPU trick)
-      4. Foreground: scale zoom -> crop center
-      5. Overlay foreground on background
+def _apply_mirror(video_label: str, parts: list[str], mirror: bool) -> str:
+    """Apply hflip if mirror is requested. Returns the (possibly new) label."""
+    if mirror:
+        mirror_label = "vmirror"
+        parts.append(f"[{video_label}]hflip[{mirror_label}]")
+        return mirror_label
+    return video_label
 
-    Returns (filter_string, final_video_label).
+
+def _build_style_blur_zoom(video_label: str, opts: VideoOptions) -> tuple[str, str]:
+    """
+    Default layout: blur background + zoomed foreground + overlay (9:16).
     """
     out_w = opts.width
     out_h = opts.height
@@ -130,17 +130,10 @@ def _build_visual_style_filter(
     bg_small_h = out_h // 4
 
     parts: list[str] = []
+    video_label = _apply_mirror(video_label, parts, opts.mirror)
 
-    # Mirror (hflip) if requested — applied before split
-    if opts.mirror:
-        mirror_label = "vmirror"
-        parts.append(f"[{video_label}]hflip[{mirror_label}]")
-        video_label = mirror_label
-
-    # Split the stream
     parts.append(f"[{video_label}]split[bg_src][fg_src]")
 
-    # Background: scale down -> blur -> scale up
     parts.append(
         f"[bg_src]scale={bg_small_w}:{bg_small_h}:"
         f"force_original_aspect_ratio=increase,"
@@ -150,21 +143,103 @@ def _build_visual_style_filter(
         f"scale={out_w}:{out_h}[bg]"
     )
 
-    # Foreground: zoom scale -> crop center
     parts.append(
         f"[fg_src]scale={opts.zoom_level}:-2,"
         f"crop={out_w}:ih:(iw-{out_w})/2:0[fg]"
     )
 
-    # Overlay: foreground centered on blurred background
     parts.append(
         f"[bg][fg]overlay=x=0:y=(H-h)/2,"
         f"scale={out_w}:{out_h},"
         f"setsar=1[vout]"
     )
 
-    full = ";\n".join(parts)
-    return full, "vout"
+    return ";\n".join(parts), "vout"
+
+
+def _build_style_vertical(video_label: str, opts: VideoOptions) -> tuple[str, str]:
+    """
+    Simple vertical crop from center — no blur background.
+    Scales to fill height, then crops width centered.
+    """
+    out_w = opts.width
+    out_h = opts.height
+
+    parts: list[str] = []
+    video_label = _apply_mirror(video_label, parts, opts.mirror)
+
+    parts.append(
+        f"[{video_label}]scale=-2:{out_h}:"
+        f"force_original_aspect_ratio=increase,"
+        f"crop={out_w}:{out_h},"
+        f"setsar=1[vout]"
+    )
+
+    return ";\n".join(parts), "vout"
+
+
+def _build_style_horizontal(video_label: str, opts: VideoOptions) -> tuple[str, str]:
+    """
+    Keep original aspect ratio and resolution — no visual transformation.
+    """
+    parts: list[str] = []
+    video_label = _apply_mirror(video_label, parts, opts.mirror)
+
+    parts.append(f"[{video_label}]setsar=1[vout]")
+
+    return ";\n".join(parts), "vout"
+
+
+def _build_style_blur(video_label: str, opts: VideoOptions) -> tuple[str, str]:
+    """
+    Blur background + original video (no zoom) centered.
+    Like blur_zoom but foreground scales to fit width without extra zoom.
+    """
+    out_w = opts.width
+    out_h = opts.height
+    bg_small_w = out_w // 4
+    bg_small_h = out_h // 4
+
+    parts: list[str] = []
+    video_label = _apply_mirror(video_label, parts, opts.mirror)
+
+    parts.append(f"[{video_label}]split[bg_src][fg_src]")
+
+    parts.append(
+        f"[bg_src]scale={bg_small_w}:{bg_small_h}:"
+        f"force_original_aspect_ratio=increase,"
+        f"crop={bg_small_w}:{bg_small_h},"
+        f"boxblur=luma_radius=20:luma_power=2:"
+        f"chroma_radius=20:chroma_power=2,"
+        f"scale={out_w}:{out_h}[bg]"
+    )
+
+    parts.append(
+        f"[fg_src]scale={out_w}:-2[fg]"
+    )
+
+    parts.append(
+        f"[bg][fg]overlay=x=0:y=(H-h)/2,"
+        f"scale={out_w}:{out_h},"
+        f"setsar=1[vout]"
+    )
+
+    return ";\n".join(parts), "vout"
+
+
+def _build_visual_style_filter(
+    video_label: str,
+    opts: VideoOptions,
+) -> tuple[str, str]:
+    """Dispatch to the correct visual style builder based on layout."""
+    builders = {
+        "blur_zoom": _build_style_blur_zoom,
+        "vertical": _build_style_vertical,
+        "horizontal": _build_style_horizontal,
+        "blur": _build_style_blur,
+    }
+    builder = builders.get(opts.layout, _build_style_blur_zoom)
+    return builder(video_label, opts)
 
 
 # ---------------------------------------------------------------------------

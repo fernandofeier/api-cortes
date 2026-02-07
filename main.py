@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Security, UploadFile
@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from core.config import settings
 from core.job_store import cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
-from services.orchestrator import process_video_pipeline
+from services.orchestrator import manual_cut_pipeline, process_video_pipeline
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -46,6 +46,10 @@ async def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
 # Request / Response models
 # ---------------------------------------------------------------------------
 class ProcessingOptions(BaseModel):
+    layout: Literal["blur_zoom", "vertical", "horizontal", "blur"] = Field(
+        "blur_zoom",
+        description="Video layout preset: blur_zoom (default), vertical, horizontal, blur",
+    )
     max_clips: int = Field(
         1, ge=1, le=10,
         description="Number of cortes to generate (requires video > 10 min for multi-clip)",
@@ -95,6 +99,31 @@ class ProcessAcceptedResponse(BaseModel):
     job_id: str
     status: str = "accepted"
     message: str
+
+
+class ManualClip(BaseModel):
+    start: float = Field(..., ge=0, description="Start time in seconds")
+    end: float = Field(..., gt=0, description="End time in seconds")
+    title: Optional[str] = Field(None, description="Optional title for this clip")
+
+
+class ManualCutRequest(BaseModel):
+    file_id: str = Field(..., description="Google Drive file ID of the source video")
+    webhook_url: HttpUrl = Field(
+        ..., description="URL to POST results to upon completion"
+    )
+    drive_folder_id: Optional[str] = Field(
+        None,
+        description="Google Drive folder ID for uploads. If omitted, uploads to Drive root.",
+    )
+    clips: list[ManualClip] = Field(
+        ..., min_length=1, max_length=20,
+        description="Array of clips with start/end timestamps (seconds)",
+    )
+    options: Optional[ProcessingOptions] = Field(
+        None,
+        description="Optional processing options (layout, mirror, etc). If omitted, defaults are used.",
+    )
 
 
 class HealthResponse(BaseModel):
@@ -229,6 +258,56 @@ async def get_job_status(job_id: str, _key: str = Depends(verify_api_key)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.to_dict()
+
+
+@app.post("/v1/manual-cut", response_model=ProcessAcceptedResponse, status_code=202)
+async def manual_cut(
+    request: ManualCutRequest,
+    background_tasks: BackgroundTasks,
+    _key: str = Depends(verify_api_key),
+):
+    """Manual video cutting — no AI analysis, user provides exact timestamps."""
+    if not request.file_id.strip():
+        raise HTTPException(status_code=422, detail="file_id cannot be empty")
+
+    # Validate clip timestamps
+    for i, clip in enumerate(request.clips):
+        if clip.end <= clip.start:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Clip {i + 1}: end ({clip.end}) must be greater than start ({clip.start})",
+            )
+
+    # Pre-flight: Drive must be authorized
+    if not os.path.exists(settings.google_drive_token_json):
+        auth_url = f"{settings.app_base_url.rstrip('/')}/auth/drive?key=YOUR_API_KEY"
+        raise HTTPException(
+            status_code=503,
+            detail="Servico indisponivel: Google Drive nao autorizado. "
+            f"Envie o client_secret.json via POST /v1/upload-credentials "
+            f"e autorize em {auth_url}",
+        )
+
+    job_id = str(uuid.uuid4())
+    create_job(job_id=job_id, file_id=request.file_id, webhook_url=str(request.webhook_url))
+
+    opts = request.options or ProcessingOptions()
+
+    background_tasks.add_task(
+        manual_cut_pipeline,
+        job_id=job_id,
+        file_id=request.file_id,
+        webhook_url=str(request.webhook_url),
+        clips=[{"start": c.start, "end": c.end, "title": c.title} for c in request.clips],
+        drive_folder_id=request.drive_folder_id,
+        options=opts,
+        http_client=app.state.http_client,
+    )
+
+    return ProcessAcceptedResponse(
+        job_id=job_id,
+        message=f"Manual cut started ({len(request.clips)} clips). Results will be sent to {request.webhook_url}",
+    )
 
 
 # ---------------------------------------------------------------------------

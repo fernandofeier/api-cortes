@@ -43,6 +43,7 @@ async def process_video_pipeline(
 
         # Build VideoOptions from API ProcessingOptions
         video_opts = VideoOptions(
+            layout=options.layout if options else "blur_zoom",
             zoom_level=options.zoom_level if options else 1400,
             fade_duration=options.fade_duration if options else 1.0,
             width=options.width if options else 1080,
@@ -166,6 +167,162 @@ async def process_video_pipeline(
 
     except Exception as e:
         logger.exception(f"[{job_id}] Pipeline failed: {e}")
+
+        error_data = {"message": str(e), "type": type(e).__name__}
+
+        job = get_job(job_id)
+        if job:
+            job.update(JobStep.ERROR, str(e))
+            job.error = error_data
+
+        try:
+            await send_webhook(
+                http_client=http_client,
+                url=webhook_url,
+                payload={
+                    "job_id": job_id,
+                    "status": "error",
+                    "original_file_id": file_id,
+                    "error": error_data,
+                },
+            )
+        except Exception as webhook_err:
+            logger.error(f"[{job_id}] Failed to send error webhook: {webhook_err}")
+
+    finally:
+        if work_dir and os.path.exists(work_dir):
+            try:
+                shutil.rmtree(work_dir)
+                logger.info(f"[{job_id}] Cleaned up work dir: {work_dir}")
+            except Exception as cleanup_err:
+                logger.warning(
+                    f"[{job_id}] Failed to clean up {work_dir}: {cleanup_err}"
+                )
+
+
+async def manual_cut_pipeline(
+    job_id: str,
+    file_id: str,
+    webhook_url: str,
+    clips: list[dict],
+    drive_folder_id: str | None = None,
+    options: "ProcessingOptions | None" = None,
+    http_client: httpx.AsyncClient = None,
+) -> None:
+    """Manual cut pipeline — no AI, user provides exact timestamps."""
+    work_dir = None
+    try:
+        # --- Setup ---
+        os.makedirs(settings.temp_dir, exist_ok=True)
+        work_dir = tempfile.mkdtemp(
+            prefix=f"job-{job_id[:8]}-",
+            dir=settings.temp_dir,
+        )
+        logger.info(f"[{job_id}] Manual cut started. Work dir: {work_dir}")
+
+        video_opts = VideoOptions(
+            layout=options.layout if options else "blur_zoom",
+            zoom_level=options.zoom_level if options else 1400,
+            fade_duration=options.fade_duration if options else 1.0,
+            width=options.width if options else 1080,
+            height=options.height if options else 1920,
+            mirror=options.mirror if options else False,
+        )
+
+        source_path = os.path.join(work_dir, "source.mp4")
+
+        # --- Step 1: Download from Google Drive ---
+        _update_job(job_id, JobStep.DOWNLOADING, "Baixando video...")
+        await asyncio.to_thread(download_file, file_id, source_path)
+
+        if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
+            raise RuntimeError("Downloaded file is empty or missing")
+
+        size_mb = os.path.getsize(source_path) / (1024 * 1024)
+        _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
+
+        # --- Step 2: Process each clip with FFmpeg ---
+        generated_clips = []
+
+        for i, clip in enumerate(clips):
+            clip_num = i + 1
+            clip_title = clip.get("title") or f"Clip {clip_num}"
+            clip_label = f"Clip {clip_num}/{len(clips)}"
+
+            _update_job(
+                job_id, JobStep.PROCESSING,
+                f"Gerando {clip_label}: '{clip_title}'...",
+            )
+
+            output_name = f"clip-{job_id[:8]}-{clip_num}.mp4"
+            output_path = os.path.join(work_dir, output_name)
+
+            engine_segments = [Segment(start=clip["start"], end=clip["end"])]
+
+            await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
+
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                logger.error(f"[{job_id}] Empty output for {clip_label}")
+                continue
+
+            output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(f"[{job_id}] {clip_label} complete: {output_size_mb:.1f} MB")
+
+            # --- Step 3: Upload each clip ---
+            _update_job(
+                job_id, JobStep.UPLOADING,
+                f"Enviando {clip_label} para o Drive...",
+            )
+
+            drive_result = await asyncio.to_thread(
+                upload_file,
+                output_path,
+                output_name,
+                drive_folder_id,
+            )
+
+            generated_clips.append({
+                "clip_number": clip_num,
+                "title": clip_title,
+                "file_id": drive_result["id"],
+                "file_name": drive_result["name"],
+                "web_view_link": drive_result.get("webViewLink"),
+                "start": clip["start"],
+                "end": clip["end"],
+                "output_size_mb": round(output_size_mb, 2),
+            })
+
+        if not generated_clips:
+            raise RuntimeError("Nenhum clip foi processado com sucesso")
+
+        # --- Step 4: Send webhook with all results ---
+        _update_job(job_id, JobStep.SENDING_WEBHOOK, "Enviando resultados...")
+
+        result_payload = {
+            "total_clips": len(generated_clips),
+            "generated_clips": generated_clips,
+        }
+
+        await send_webhook(
+            http_client=http_client,
+            url=webhook_url,
+            payload={
+                "job_id": job_id,
+                "status": "completed",
+                "original_file_id": file_id,
+                "result": result_payload,
+            },
+        )
+
+        job = get_job(job_id)
+        if job:
+            job.update(JobStep.COMPLETED, f"Concluido! {len(generated_clips)} clip(s) gerado(s)")
+            job.result = result_payload
+
+        logger.info(f"[{job_id}] Manual cut completed: {len(generated_clips)} clip(s)")
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Manual cut failed: {e}")
 
         error_data = {"message": str(e), "type": type(e).__name__}
 
