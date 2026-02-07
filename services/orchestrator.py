@@ -354,3 +354,143 @@ async def manual_cut_pipeline(
                 logger.warning(
                     f"[{job_id}] Failed to clean up {work_dir}: {cleanup_err}"
                 )
+
+
+async def manual_edit_pipeline(
+    job_id: str,
+    file_id: str,
+    webhook_url: str,
+    title: str | None,
+    segments: list[dict],
+    drive_folder_id: str | None = None,
+    options: "ProcessingOptions | None" = None,
+    http_client: httpx.AsyncClient = None,
+) -> None:
+    """Manual edit pipeline — combine multiple segments into one video with crossfade transitions."""
+    work_dir = None
+    try:
+        # --- Setup ---
+        os.makedirs(settings.temp_dir, exist_ok=True)
+        work_dir = tempfile.mkdtemp(
+            prefix=f"job-{job_id[:8]}-",
+            dir=settings.temp_dir,
+        )
+        logger.info(f"[{job_id}] Manual edit started. Work dir: {work_dir}")
+
+        video_opts = VideoOptions(
+            layout=options.layout if options else "blur_zoom",
+            zoom_level=options.zoom_level if options else 1400,
+            fade_duration=options.fade_duration if options else 1.0,
+            width=options.width if options else 1080,
+            height=options.height if options else 1920,
+            mirror=options.mirror if options else False,
+        )
+
+        source_path = os.path.join(work_dir, "source.mp4")
+
+        # --- Step 1: Download from Google Drive ---
+        _update_job(job_id, JobStep.DOWNLOADING, "Baixando video...")
+        await asyncio.to_thread(download_file, file_id, source_path)
+
+        if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
+            raise RuntimeError("Downloaded file is empty or missing")
+
+        size_mb = os.path.getsize(source_path) / (1024 * 1024)
+        _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
+
+        # --- Step 2: Process all segments into one video with crossfade ---
+        clip_title = title or "Edited clip"
+        _update_job(
+            job_id, JobStep.PROCESSING,
+            f"Gerando video '{clip_title}' ({len(segments)} segmentos)...",
+        )
+
+        output_name = f"edit-{job_id[:8]}.mp4"
+        output_path = os.path.join(work_dir, output_name)
+
+        engine_segments = [
+            Segment(start=seg["start"], end=seg["end"]) for seg in segments
+        ]
+
+        await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError("FFmpeg produced empty output")
+
+        output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        logger.info(f"[{job_id}] Edit complete: {output_size_mb:.1f} MB")
+
+        # --- Step 3: Upload ---
+        _update_job(job_id, JobStep.UPLOADING, "Enviando para o Drive...")
+
+        drive_result = await asyncio.to_thread(
+            upload_file,
+            output_path,
+            output_name,
+            drive_folder_id,
+        )
+
+        # --- Step 4: Send webhook ---
+        _update_job(job_id, JobStep.SENDING_WEBHOOK, "Enviando resultados...")
+
+        result_payload = {
+            "title": clip_title,
+            "file_id": drive_result["id"],
+            "file_name": drive_result["name"],
+            "web_view_link": drive_result.get("webViewLink"),
+            "segments": segments,
+            "total_segments": len(segments),
+            "output_size_mb": round(output_size_mb, 2),
+        }
+
+        await send_webhook(
+            http_client=http_client,
+            url=webhook_url,
+            payload={
+                "job_id": job_id,
+                "status": "completed",
+                "original_file_id": file_id,
+                "result": result_payload,
+            },
+        )
+
+        job = get_job(job_id)
+        if job:
+            job.update(JobStep.COMPLETED, f"Concluido! Video editado com {len(segments)} segmento(s)")
+            job.result = result_payload
+
+        logger.info(f"[{job_id}] Manual edit completed: {len(segments)} segment(s)")
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Manual edit failed: {e}")
+
+        error_data = {"message": str(e), "type": type(e).__name__}
+
+        job = get_job(job_id)
+        if job:
+            job.update(JobStep.ERROR, str(e))
+            job.error = error_data
+
+        try:
+            await send_webhook(
+                http_client=http_client,
+                url=webhook_url,
+                payload={
+                    "job_id": job_id,
+                    "status": "error",
+                    "original_file_id": file_id,
+                    "error": error_data,
+                },
+            )
+        except Exception as webhook_err:
+            logger.error(f"[{job_id}] Failed to send error webhook: {webhook_err}")
+
+    finally:
+        if work_dir and os.path.exists(work_dir):
+            try:
+                shutil.rmtree(work_dir)
+                logger.info(f"[{job_id}] Cleaned up work dir: {work_dir}")
+            except Exception as cleanup_err:
+                logger.warning(
+                    f"[{job_id}] Failed to clean up {work_dir}: {cleanup_err}"
+                )

@@ -18,7 +18,7 @@ from pydantic import BaseModel, BeforeValidator, Field, HttpUrl
 from core.config import settings
 from core.job_store import cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
-from services.orchestrator import manual_cut_pipeline, process_video_pipeline
+from services.orchestrator import manual_cut_pipeline, manual_edit_pipeline, process_video_pipeline
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -139,6 +139,33 @@ class ManualCutRequest(BaseModel):
     options: Optional[ProcessingOptions] = Field(
         None,
         description="Optional processing options (layout, mirror, etc). If omitted, defaults are used.",
+    )
+
+
+class ManualSegment(BaseModel):
+    start: Timestamp = Field(..., ge=0, description="Start time — seconds (352) or string ('5:52')")
+    end: Timestamp = Field(..., gt=0, description="End time — seconds (370) or string ('6:10')")
+
+
+class ManualEditRequest(BaseModel):
+    file_id: str = Field(..., description="Google Drive file ID of the source video")
+    webhook_url: HttpUrl = Field(
+        ..., description="URL to POST results to upon completion"
+    )
+    drive_folder_id: Optional[str] = Field(
+        None,
+        description="Google Drive folder ID for uploads. If omitted, uploads to Drive root.",
+    )
+    title: Optional[str] = Field(
+        None, description="Title for the output video",
+    )
+    segments: list[ManualSegment] = Field(
+        ..., min_length=1, max_length=20,
+        description="Array of segments to combine into a single video with crossfade transitions",
+    )
+    options: Optional[ProcessingOptions] = Field(
+        None,
+        description="Optional processing options (layout, fade_duration, mirror, etc). If omitted, defaults are used.",
     )
 
 
@@ -323,6 +350,57 @@ async def manual_cut(
     return ProcessAcceptedResponse(
         job_id=job_id,
         message=f"Manual cut started ({len(request.clips)} clips). Results will be sent to {request.webhook_url}",
+    )
+
+
+@app.post("/v1/manual-edit", response_model=ProcessAcceptedResponse, status_code=202)
+async def manual_edit(
+    request: ManualEditRequest,
+    background_tasks: BackgroundTasks,
+    _key: str = Depends(verify_api_key),
+):
+    """Manual video editing — combine multiple segments into one video with crossfade transitions."""
+    if not request.file_id.strip():
+        raise HTTPException(status_code=422, detail="file_id cannot be empty")
+
+    # Validate segment timestamps
+    for i, seg in enumerate(request.segments):
+        if seg.end <= seg.start:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Segment {i + 1}: end ({seg.end}) must be greater than start ({seg.start})",
+            )
+
+    # Pre-flight: Drive must be authorized
+    if not os.path.exists(settings.google_drive_token_json):
+        auth_url = f"{settings.app_base_url.rstrip('/')}/auth/drive?key=YOUR_API_KEY"
+        raise HTTPException(
+            status_code=503,
+            detail="Servico indisponivel: Google Drive nao autorizado. "
+            f"Envie o client_secret.json via POST /v1/upload-credentials "
+            f"e autorize em {auth_url}",
+        )
+
+    job_id = str(uuid.uuid4())
+    create_job(job_id=job_id, file_id=request.file_id, webhook_url=str(request.webhook_url))
+
+    opts = request.options or ProcessingOptions()
+
+    background_tasks.add_task(
+        manual_edit_pipeline,
+        job_id=job_id,
+        file_id=request.file_id,
+        webhook_url=str(request.webhook_url),
+        title=request.title,
+        segments=[{"start": s.start, "end": s.end} for s in request.segments],
+        drive_folder_id=request.drive_folder_id,
+        options=opts,
+        http_client=app.state.http_client,
+    )
+
+    return ProcessAcceptedResponse(
+        job_id=job_id,
+        message=f"Manual edit started ({len(request.segments)} segments → 1 video). Results will be sent to {request.webhook_url}",
     )
 
 

@@ -341,6 +341,80 @@ X-API-Key: sua-api-key
 }
 ```
 
+### POST /v1/manual-edit
+
+Edicao manual de video — combina multiplos segmentos em **um unico video** com transicoes de crossfade entre eles. Funciona como a IA faz, porem com timestamps manuais.
+
+**Headers:**
+```
+Content-Type: application/json
+X-API-Key: sua-api-key
+```
+
+**Body:**
+```json
+{
+  "file_id": "1ABC123def456",
+  "webhook_url": "https://seu-servidor.com/webhook",
+  "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
+  "title": "Melhores momentos",
+  "segments": [
+    {"start": "1:20", "end": "1:55"},
+    {"start": "5:52", "end": "6:10"},
+    {"start": "12:00", "end": "12:45"}
+  ],
+  "options": {
+    "layout": "blur_zoom",
+    "fade_duration": 1.0,
+    "mirror": false
+  }
+}
+```
+
+**Campos do body:**
+
+| Campo | Tipo | Obrigatorio | Descricao |
+|-------|------|-------------|-----------|
+| `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa) |
+| `webhook_url` | string | Sim | URL para receber o resultado via POST |
+| `drive_folder_id` | string | Nao | Pasta no Drive para upload. Se omitido, salva na raiz |
+| `title` | string | Nao | Titulo do video de saida |
+| `segments` | array | Sim | Array de segmentos para combinar (1 a 20) |
+| `segments[].start` | string/float | Sim | Inicio do segmento — `"5:52"` ou `352` (segundos) |
+| `segments[].end` | string/float | Sim | Fim do segmento — `"6:10"` ou `370` (segundos) |
+| `options` | object | Nao | Opcoes de layout, fade_duration, mirror, etc (mesmas do `/v1/process`) |
+
+**Resposta 202:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "accepted",
+  "message": "Manual edit started (3 segments → 1 video). Results will be sent to https://..."
+}
+```
+
+**Webhook de sucesso:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "completed",
+  "original_file_id": "1ABC123def456",
+  "result": {
+    "title": "Melhores momentos",
+    "file_id": "1XYZ789...",
+    "file_name": "edit-550e8400.mp4",
+    "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",
+    "segments": [
+      {"start": 80.0, "end": 115.0},
+      {"start": 352.0, "end": 370.0},
+      {"start": 720.0, "end": 765.0}
+    ],
+    "total_segments": 3,
+    "output_size_mb": 12.34
+  }
+}
+```
+
 ### GET /v1/status/{job_id}
 
 Consulta o status de um job em andamento.
