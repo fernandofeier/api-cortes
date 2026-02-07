@@ -182,6 +182,22 @@ async def process_video(
     if not request.file_id.strip():
         raise HTTPException(status_code=422, detail="file_id cannot be empty")
 
+    # --- Pre-flight checks: fail fast before accepting the job ---
+    if not settings.gemini_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Servico indisponivel: chave da API Gemini nao configurada (GEMINI_API_KEY).",
+        )
+
+    if not os.path.exists(settings.google_drive_token_json):
+        auth_url = f"{settings.app_base_url.rstrip('/')}/auth/drive?key=YOUR_API_KEY"
+        raise HTTPException(
+            status_code=503,
+            detail="Servico indisponivel: Google Drive nao autorizado. "
+            f"Envie o client_secret.json via POST /v1/upload-credentials "
+            f"e autorize em {auth_url}",
+        )
+
     job_id = str(uuid.uuid4())
 
     # Register job in the store
