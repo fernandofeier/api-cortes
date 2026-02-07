@@ -285,8 +285,8 @@ X-API-Key: sua-api-key
   "webhook_url": "https://seu-servidor.com/webhook",
   "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
   "clips": [
-    {"start": 40, "end": 60, "title": "Momento engracado"},
-    {"start": 120, "end": 150}
+    {"start": "5:52", "end": "6:10", "title": "Momento engracado"},
+    {"start": "8:29", "end": "10:24"}
   ],
   "options": {
     "layout": "blur_zoom",
@@ -303,8 +303,8 @@ X-API-Key: sua-api-key
 | `webhook_url` | string | Sim | URL para receber o resultado via POST |
 | `drive_folder_id` | string | Nao | Pasta no Drive para upload. Se omitido, salva na raiz |
 | `clips` | array | Sim | Array de clips com timestamps (1 a 20 clips) |
-| `clips[].start` | float | Sim | Inicio do clip em segundos |
-| `clips[].end` | float | Sim | Fim do clip em segundos |
+| `clips[].start` | string/float | Sim | Inicio do clip — `"5:52"` ou `352` (segundos) |
+| `clips[].end` | string/float | Sim | Fim do clip — `"6:10"` ou `370` (segundos) |
 | `clips[].title` | string | Nao | Titulo opcional do clip |
 | `options` | object | Nao | Opcoes de layout, mirror, etc (mesmas do `/v1/process`) |
 
@@ -332,8 +332,8 @@ X-API-Key: sua-api-key
         "file_id": "1XYZ789...",
         "file_name": "clip-550e8400-1.mp4",
         "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",
-        "start": 40,
-        "end": 60,
+        "start": 352.0,
+        "end": 370.0,
         "output_size_mb": 3.21
       }
     ]

@@ -7,13 +7,13 @@ import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Security, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, BeforeValidator, Field, HttpUrl
 
 from core.config import settings
 from core.job_store import cleanup_old_jobs, create_job, get_job
@@ -101,9 +101,25 @@ class ProcessAcceptedResponse(BaseModel):
     message: str
 
 
+def _parse_timestamp(value: Union[str, int, float]) -> float:
+    """Convert 'M:SS', 'MM:SS', 'H:MM:SS' or numeric seconds to float seconds."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and ":" in value:
+        parts = value.strip().split(":")
+        if len(parts) == 2:  # M:SS or MM:SS
+            return int(parts[0]) * 60 + float(parts[1])
+        if len(parts) == 3:  # H:MM:SS
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    return float(value)
+
+
+Timestamp = Annotated[float, BeforeValidator(_parse_timestamp)]
+
+
 class ManualClip(BaseModel):
-    start: float = Field(..., ge=0, description="Start time in seconds")
-    end: float = Field(..., gt=0, description="End time in seconds")
+    start: Timestamp = Field(..., ge=0, description="Start time — seconds (352) or string ('5:52')")
+    end: Timestamp = Field(..., gt=0, description="End time — seconds (370) or string ('6:10')")
     title: Optional[str] = Field(None, description="Optional title for this clip")
 
 
