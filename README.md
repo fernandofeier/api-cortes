@@ -567,6 +567,56 @@ api-cortes/
 
 ---
 
+## Bot do Telegram (Opcional)
+
+Bot que recebe videos no Telegram e faz upload direto ao Google Drive. Usa o protocolo MTProto (pyrogram) para suportar arquivos ate 2 GB.
+
+### Pre-requisitos
+
+1. **Criar bot no Telegram**: Fale com [@BotFather](https://t.me/BotFather) → `/newbot` → copie o token
+2. **Obter API ID/Hash**: Acesse [my.telegram.org](https://my.telegram.org) → "API development tools" → copie `api_id` e `api_hash`
+3. **Seu User ID do Telegram**: Fale com [@userinfobot](https://t.me/userinfobot) para descobrir seu ID numerico
+
+### Configuracao
+
+Adicione ao `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
+TELEGRAM_ALLOWED_USERS=123456789,987654321
+TELEGRAM_DEFAULT_DRIVE_FOLDER=1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3
+```
+
+| Variavel | Obrigatorio | Descricao |
+|----------|-------------|-----------|
+| `TELEGRAM_BOT_TOKEN` | Sim | Token do bot (BotFather) |
+| `TELEGRAM_API_ID` | Sim | API ID (my.telegram.org) |
+| `TELEGRAM_API_HASH` | Sim | API Hash (my.telegram.org) |
+| `TELEGRAM_ALLOWED_USERS` | Sim | IDs dos usuarios permitidos (separados por virgula) |
+| `TELEGRAM_DEFAULT_DRIVE_FOLDER` | Nao | Pasta padrao no Drive para uploads |
+
+Se `TELEGRAM_BOT_TOKEN` estiver vazio, o bot simplesmente nao inicia e a API funciona normalmente.
+
+### Comandos do Bot
+
+| Comando | Descricao |
+|---------|-----------|
+| `/start` | Mensagem de boas-vindas e instrucoes |
+| `/pasta <folder_id>` | Define a pasta do Drive para seus uploads |
+| `/pasta` | Mostra a pasta atual |
+
+### Como Usar
+
+1. Configure as variaveis de ambiente e suba o container
+2. Abra o bot no Telegram (procure pelo nome que voce deu no BotFather)
+3. Envie `/pasta <folder_id>` para definir a pasta do Drive (opcional)
+4. Envie um video ou documento — o bot baixa e envia ao Drive automaticamente
+5. Receba o link do Drive na resposta
+
+---
+
 ## Limites e Consideracoes
 
 - **Duracao dos cortes**: Cada corte tem no maximo 80 segundos (2-4 segmentos de 10-40s)

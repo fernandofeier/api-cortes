@@ -19,6 +19,7 @@ from core.config import settings
 from core.job_store import cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
 from services.orchestrator import manual_cut_pipeline, manual_edit_pipeline, process_video_pipeline
+from services.telegram_bot import start_telegram_bot, stop_telegram_bot
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -221,10 +222,15 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"Job cleanup error: {e}")
 
     cleanup_task = asyncio.create_task(_job_cleanup_loop())
+
+    # Start Telegram bot (optional — skips silently if not configured)
+    await start_telegram_bot()
+
     logger.info("Application started")
 
     yield
 
+    await stop_telegram_bot()
     cleanup_task.cancel()
     await app.state.http_client.aclose()
     logger.info("Application shut down")

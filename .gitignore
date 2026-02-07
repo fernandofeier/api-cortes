@@ -12,6 +12,7 @@ credentials/
 service-account.json
 client_secret.json
 token.json
+*.session
 
 # Media files
 *.mp4

@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     multi_clip_min_video_duration: int = 600  # 10 minutes in seconds
     max_upload_size_mb: int = 2000  # Gemini File API supports up to 2 GB
 
+    # --- Telegram Bot (optional) ---
+    telegram_bot_token: str = ""
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+    telegram_allowed_users: str = ""
+    telegram_default_drive_folder: str = ""
+
     # --- Auth ---
     api_key: str = "changeme-default-key-2024"
 

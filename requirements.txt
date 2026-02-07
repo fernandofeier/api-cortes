@@ -8,3 +8,5 @@ google-auth>=2.36.0
 google-auth-oauthlib>=1.2.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
+pyrogram>=2.0.0
+tgcrypto>=1.2.0

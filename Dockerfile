@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Install FFmpeg + curl (for healthcheck) BEFORE Python dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg curl && \
+    apt-get install -y --no-install-recommends ffmpeg curl gcc python3-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
