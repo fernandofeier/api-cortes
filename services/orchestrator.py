@@ -54,17 +54,17 @@ async def process_video_pipeline(
         source_path = os.path.join(work_dir, "source.mp4")
 
         # --- Step 1: Download from Google Drive ---
-        _update_job(job_id, JobStep.DOWNLOADING, "Downloading video from Google Drive...")
+        _update_job(job_id, JobStep.DOWNLOADING, "Baixando video...")
         await asyncio.to_thread(download_file, file_id, source_path)
 
         if not os.path.exists(source_path) or os.path.getsize(source_path) == 0:
             raise RuntimeError("Downloaded file is empty or missing")
 
         size_mb = os.path.getsize(source_path) / (1024 * 1024)
-        _update_job(job_id, JobStep.DOWNLOADING, f"Download complete ({size_mb:.1f} MB)")
+        _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
 
         # --- Step 2: Analyze with Gemini ---
-        _update_job(job_id, JobStep.ANALYZING, "Uploading video to Gemini for AI analysis...")
+        _update_job(job_id, JobStep.ANALYZING, "Analisando video...")
         cortes: list[Corte] = await analyze_video(
             video_path=source_path,
             custom_instruction=gemini_prompt_instruction,
@@ -72,11 +72,11 @@ async def process_video_pipeline(
         )
 
         if not cortes:
-            raise RuntimeError("Gemini returned no viable cortes")
+            raise RuntimeError("Nenhum corte viavel encontrado no video")
 
         _update_job(
             job_id, JobStep.ANALYZING,
-            f"Gemini found {len(cortes)} corte(s)",
+            f"Analise concluida — {len(cortes)} corte(s) identificado(s)",
         )
 
         # --- Step 3: Process each corte with FFmpeg ---
@@ -86,7 +86,7 @@ async def process_video_pipeline(
             corte_label = f"Corte {corte.corte_number}/{len(cortes)}"
             _update_job(
                 job_id, JobStep.PROCESSING,
-                f"FFmpeg processing {corte_label}: '{corte.title}'...",
+                f"Gerando {corte_label}: '{corte.title}'...",
             )
 
             output_name = f"viral-{job_id[:8]}-corte{corte.corte_number}.mp4"
@@ -99,7 +99,7 @@ async def process_video_pipeline(
             await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
 
             if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                logger.error(f"[{job_id}] FFmpeg produced empty output for {corte_label}")
+                logger.error(f"[{job_id}] Empty output for {corte_label}")
                 continue
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
@@ -108,7 +108,7 @@ async def process_video_pipeline(
             # --- Step 4: Upload each corte ---
             _update_job(
                 job_id, JobStep.UPLOADING,
-                f"Uploading {corte_label} to Google Drive...",
+                f"Enviando {corte_label} para o Drive...",
             )
 
             drive_result = await asyncio.to_thread(
@@ -132,10 +132,10 @@ async def process_video_pipeline(
             })
 
         if not generated_clips:
-            raise RuntimeError("No cortes were successfully processed")
+            raise RuntimeError("Nenhum corte foi processado com sucesso")
 
         # --- Step 5: Send single webhook with all results ---
-        _update_job(job_id, JobStep.SENDING_WEBHOOK, "Sending results to webhook...")
+        _update_job(job_id, JobStep.SENDING_WEBHOOK, "Enviando resultados...")
 
         result_payload = {
             "total_clips": len(generated_clips),
@@ -156,7 +156,7 @@ async def process_video_pipeline(
         # Mark completed
         job = get_job(job_id)
         if job:
-            job.update(JobStep.COMPLETED, f"Done! {len(generated_clips)} corte(s) generated")
+            job.update(JobStep.COMPLETED, f"Concluido! {len(generated_clips)} corte(s) gerado(s)")
             job.result = result_payload
 
         logger.info(f"[{job_id}] Pipeline completed: {len(generated_clips)} corte(s)")

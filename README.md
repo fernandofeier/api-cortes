@@ -117,7 +117,7 @@ docker compose up -d --build
 Verifique se esta rodando:
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8000/
 # {"status":"ok","version":"1.0.0"}
 ```
 
@@ -179,12 +179,12 @@ Todas as chamadas `/v1/*` exigem o header:
 X-API-Key: sua-api-key-aqui
 ```
 
-### GET /health
+### GET /
 
 Health check (publico, sem autenticacao).
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8000/
 ```
 
 ```json
@@ -270,12 +270,12 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
 {
   "job_id": "550e8400-...",
   "status": "processing",
-  "progress_message": "FFmpeg processing Corte 1/2: 'Momento viral'...",
+  "progress_message": "Gerando Corte 1/2: 'Momento viral'...",
   "elapsed_seconds": 45.2
 }
 ```
 
-**Status possiveis:** `queued` → `downloading` → `analyzing` → `processing` → `uploading` → `sending_webhook` → `completed` | `error`
+**Status possiveis:** `queued` → `downloading` → `analyzing` → `processing` → `uploading` → `finishing` → `completed` | `error`
 
 ### Webhook Payloads
 
@@ -407,6 +407,6 @@ api-cortes/
 - **Multi-clip**: Requer video com mais de 10 minutos. Videos curtos geram 1 corte independente do `max_clips`
 - **Formato de saida**: MP4, H.264, AAC, 9:16 vertical
 - **Worker unico**: Processa um video por vez. Para escalar, use multiplas instancias atras de um load balancer
-- **Job store in-memory**: Status dos jobs se perde ao reiniciar o container
+- **Job store in-memory**: Status dos jobs se perde ao reiniciar o container. Jobs expiram automaticamente apos 3 dias
 - **Gemini file processing timeout**: 10 minutos maximo de espera
 - **Tamanho maximo de video**: Configuravel via `MAX_UPLOAD_SIZE_MB` (default: 2000 MB). O Gemini File API suporta ate 2 GB

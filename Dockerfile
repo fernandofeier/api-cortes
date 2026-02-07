@@ -25,7 +25,7 @@ EXPOSE ${PORT}
 
 # Healthcheck for Docker / panels / load balancers
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD curl -f http://localhost:${PORT}/ || exit 1
 
 # Single worker: BackgroundTasks runs in the same process
 CMD uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1

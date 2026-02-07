@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
 from core.config import settings
-from core.job_store import create_job, get_job
+from core.job_store import cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
 from services.orchestrator import process_video_pipeline
 
@@ -137,10 +138,22 @@ async def lifespan(app: FastAPI):
         )
 
     app.state.http_client = httpx.AsyncClient(timeout=settings.webhook_timeout)
+
+    # Periodic cleanup of expired jobs (every hour)
+    async def _job_cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                cleanup_old_jobs()
+            except Exception as e:
+                logger.warning(f"Job cleanup error: {e}")
+
+    cleanup_task = asyncio.create_task(_job_cleanup_loop())
     logger.info("Application started")
 
     yield
 
+    cleanup_task.cancel()
     await app.state.http_client.aclose()
     logger.info("Application shut down")
 
@@ -155,7 +168,7 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/", response_model=HealthResponse)
 async def health_check():
     return HealthResponse(status="ok", version=settings.app_version)
 

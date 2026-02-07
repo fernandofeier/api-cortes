@@ -1,6 +1,11 @@
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+JOB_TTL_SECONDS = 3 * 24 * 60 * 60  # 3 days
 
 
 class JobStep(str, Enum):
@@ -9,7 +14,7 @@ class JobStep(str, Enum):
     ANALYZING = "analyzing"
     PROCESSING = "processing"
     UPLOADING = "uploading"
-    SENDING_WEBHOOK = "sending_webhook"
+    SENDING_WEBHOOK = "finishing"
     COMPLETED = "completed"
     ERROR = "error"
 
@@ -58,3 +63,17 @@ def create_job(job_id: str, file_id: str, webhook_url: str) -> Job:
 
 def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
+
+
+def cleanup_old_jobs() -> int:
+    """Remove jobs older than JOB_TTL_SECONDS. Returns number of removed jobs."""
+    now = time.time()
+    expired = [
+        jid for jid, job in _jobs.items()
+        if now - job.created_at > JOB_TTL_SECONDS
+    ]
+    for jid in expired:
+        del _jobs[jid]
+    if expired:
+        logger.info(f"Cleaned up {len(expired)} expired job(s)")
+    return len(expired)
