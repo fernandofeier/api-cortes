@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./credentials:/app/credentials:ro
+    restart: unless-stopped
+    # Uncomment below to use a custom network (e.g. for Cloudflare Tunnel)
+    # networks:
+    #   - tunnel
+
+# networks:
+#   tunnel:
+#     external: true
