@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import secrets
@@ -8,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Security
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Security, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
@@ -202,6 +203,48 @@ async def get_job_status(job_id: str, _key: str = Depends(verify_api_key)):
 
 
 # ---------------------------------------------------------------------------
+# Google Drive credentials upload (for panels without volume access)
+# ---------------------------------------------------------------------------
+@app.post("/v1/upload-credentials")
+async def upload_credentials(
+    file: UploadFile = File(...),
+    _key: str = Depends(verify_api_key),
+):
+    """Upload Google OAuth client_secret.json via API (for panel deployments)."""
+    # Read and validate JSON content
+    content = await file.read()
+    if len(content) > 50_000:  # client_secret.json is typically ~1 KB
+        raise HTTPException(status_code=400, detail="File too large. Expected a small JSON file.")
+
+    try:
+        data = json.loads(content)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid JSON file.")
+
+    # Validate it looks like a Google OAuth client secret
+    valid_keys = {"installed", "web"}
+    if not any(k in data for k in valid_keys):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid client_secret.json. Expected 'installed' or 'web' key. "
+            "Download the correct file from Google Cloud Console > Credentials > OAuth 2.0 Client IDs.",
+        )
+
+    # Save to credentials directory with the correct name
+    dest = settings.google_drive_client_secret_json
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    logger.info(f"Client secret uploaded successfully to {dest}")
+    return {
+        "status": "ok",
+        "message": "client_secret.json saved successfully. "
+        f"Now authorize Google Drive at: {settings.app_base_url.rstrip('/')}/auth/drive?key=YOUR_API_KEY",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Google Drive OAuth (web-based, for panels without terminal)
 # ---------------------------------------------------------------------------
 @app.get("/auth/drive", response_class=HTMLResponse)
@@ -222,13 +265,17 @@ async def auth_drive_page(key: str = Query(None)):
     try:
         auth_url = get_auth_url()
     except FileNotFoundError as e:
+        upload_url = f"{settings.app_base_url.rstrip('/')}/v1/upload-credentials"
         return HTMLResponse(
             "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             f"<h1>Setup Required</h1>"
             f"<p>{e}</p>"
-            "<p>Upload <code>client_secret.json</code> from "
+            "<p>Download <code>client_secret.json</code> from "
             "<a href='https://console.cloud.google.com/apis/credentials' target='_blank'>"
-            "Google Cloud Console</a> to the <code>credentials/</code> volume.</p>"
+            "Google Cloud Console</a> and upload it via API:</p>"
+            f"<pre>curl -X POST {upload_url} \\\n"
+            "  -H \"X-API-Key: YOUR_API_KEY\" \\\n"
+            "  -F \"file=@client_secret.json\"</pre>"
             "<h3>Important</h3>"
             "<p>When creating the OAuth client, choose <b>Web application</b> type "
             f"and add this redirect URI:</p>"

@@ -69,15 +69,32 @@ Voce precisa de credenciais OAuth2 para o Google Drive.
 | Docker local (terminal) | Desktop app | Nenhum necessario |
 | Easypanel / Coolify / Portainer | Web application | `{APP_BASE_URL}/auth/drive/callback` |
 
-6. Baixe o JSON e salve como `credentials/client_secret.json`
+6. Baixe o JSON (botao de download no Google Cloud Console)
+
+#### Enviando o client_secret.json
+
+**Opcao A — Via volume (Docker local):**
+
+```bash
+mkdir -p credentials
+# Coloque o client_secret.json na pasta credentials/
+```
+
+**Opcao B — Via API (paineis sem terminal):**
+
+```bash
+curl -X POST {APP_BASE_URL}/v1/upload-credentials \
+  -H "X-API-Key: SUA_API_KEY" \
+  -F "file=@client_secret.json"
+```
+
+O arquivo sera salvo automaticamente no local correto dentro do container, com o nome correto.
 
 #### Autorizando o Drive
 
 **Opcao A — Via terminal (Docker local):**
 
 ```bash
-mkdir -p credentials
-# Coloque o client_secret.json na pasta credentials/
 pip3 install google-auth-oauthlib
 python3 scripts/auth_drive.py
 # Um navegador abrira → autorize → token.json sera gerado
@@ -87,8 +104,9 @@ python3 scripts/auth_drive.py
 
 1. Certifique-se que `APP_BASE_URL` esta correto no `.env`
 2. Suba o container
-3. Acesse no navegador: `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY`
-4. Sera redirecionado ao Google → autorize → token salvo automaticamente
+3. Envie o `client_secret.json` via API (passo anterior)
+4. Acesse no navegador: `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY`
+5. Sera redirecionado ao Google → autorize → token salvo automaticamente
 
 ### 4. Suba o container
 
@@ -297,6 +315,29 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
     "message": "Gemini returned no viable cortes",
     "type": "RuntimeError"
   }
+}
+```
+
+### POST /v1/upload-credentials
+
+Envia o `client_secret.json` do Google OAuth via API (para paineis sem acesso a volumes).
+
+**Headers:**
+```
+X-API-Key: sua-api-key
+```
+
+```bash
+curl -X POST http://localhost:8000/v1/upload-credentials \
+  -H "X-API-Key: sua-api-key" \
+  -F "file=@client_secret.json"
+```
+
+**Resposta 200:**
+```json
+{
+  "status": "ok",
+  "message": "client_secret.json saved successfully. Now authorize Google Drive at: ..."
 }
 ```
 
