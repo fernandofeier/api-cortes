@@ -300,7 +300,15 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
         ],
         "output_size_mb": 8.45
       }
-    ]
+    ],
+    "usage": {
+      "input_tokens": 48250,
+      "output_tokens": 320,
+      "total_tokens": 48570,
+      "model": "gemini-3-flash-preview",
+      "estimated_cost_usd": 0.025085,
+      "estimated_cost_brl": 0.1455
+    }
   }
 }
 ```

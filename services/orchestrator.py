@@ -9,7 +9,7 @@ import httpx
 from core.config import settings
 from core.job_store import JobStep, get_job
 from services.drive_service import download_file, upload_file
-from services.gemini_service import Corte, analyze_video
+from services.gemini_service import AnalysisResult, Corte, analyze_video
 from services.video_engine import Segment, VideoOptions, process_video
 from utils.webhook_sender import send_webhook
 
@@ -65,11 +65,13 @@ async def process_video_pipeline(
 
         # --- Step 2: Analyze with Gemini ---
         _update_job(job_id, JobStep.ANALYZING, "Analisando video...")
-        cortes: list[Corte] = await analyze_video(
+        analysis: AnalysisResult = await analyze_video(
             video_path=source_path,
             custom_instruction=gemini_prompt_instruction,
             max_clips=max_clips,
         )
+        cortes = analysis.cortes
+        usage = analysis.usage
 
         if not cortes:
             raise RuntimeError("Nenhum corte viavel encontrado no video")
@@ -140,6 +142,7 @@ async def process_video_pipeline(
         result_payload = {
             "total_clips": len(generated_clips),
             "generated_clips": generated_clips,
+            "usage": usage.to_dict(),
         }
 
         await send_webhook(

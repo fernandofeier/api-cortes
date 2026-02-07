@@ -23,6 +23,60 @@ class VideoSegment:
 
 
 @dataclass
+class UsageInfo:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
+    estimated_cost_usd: float = 0.0
+    estimated_cost_brl: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "model": self.model,
+            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
+            "estimated_cost_brl": round(self.estimated_cost_brl, 4),
+        }
+
+
+# Pricing per million tokens (USD) — Gemini 3 Flash Preview
+# Source: https://ai.google.dev/gemini-api/docs/pricing
+_PRICING = {
+    "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
+}
+# Fallback: use Gemini 3 Flash Preview pricing for unknown models
+_DEFAULT_PRICING = {"input": 0.50, "output": 3.00}
+
+# USD → BRL approximate rate (updated periodically)
+_USD_TO_BRL = 5.80
+
+
+def _estimate_cost(input_tokens: int, output_tokens: int, model: str) -> UsageInfo:
+    """Estimate cost based on token usage and model pricing."""
+    pricing = _PRICING.get(model, _DEFAULT_PRICING)
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    total_usd = input_cost + output_cost
+    return UsageInfo(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        model=model,
+        estimated_cost_usd=total_usd,
+        estimated_cost_brl=total_usd * _USD_TO_BRL,
+    )
+
+
+@dataclass
+class AnalysisResult:
+    cortes: list["Corte"] = field(default_factory=list)
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+
+@dataclass
 class Corte:
     corte_number: int
     title: str
@@ -147,14 +201,14 @@ def _upload_and_wait(client: genai.Client, video_path: str):
     return uploaded_file
 
 
-def _generate_analysis(client: genai.Client, uploaded_file, prompt: str) -> str:
-    """Call Gemini generate_content and return raw text response."""
+def _generate_analysis(client: genai.Client, uploaded_file, prompt: str):
+    """Call Gemini generate_content and return the full response object."""
     logger.info(f"Sending analysis request to model: {settings.gemini_model}")
     response = client.models.generate_content(
         model=settings.gemini_model,
         contents=[uploaded_file, prompt],
     )
-    return response.text.strip()
+    return response
 
 
 def _strip_code_fences(text: str) -> str:
@@ -227,9 +281,9 @@ async def analyze_video(
     video_path: str,
     custom_instruction: Optional[str] = None,
     max_clips: int = 1,
-) -> list[Corte]:
+) -> AnalysisResult:
     """
-    Upload video to Gemini, analyze for viral segments, return cortes.
+    Upload video to Gemini, analyze for viral segments, return AnalysisResult.
 
     If max_clips > 1 and video > 10 min: returns up to max_clips cortes.
     Otherwise: returns 1 corte.
@@ -265,10 +319,24 @@ async def analyze_video(
 
     # CRITICAL: Always cleanup the uploaded file, even if generation/parsing fails.
     # This prevents orphaned files from consuming Gemini storage quota.
+    usage = UsageInfo()
     try:
         # Build prompt and generate
         prompt = _build_prompt(num_clips, custom_instruction)
-        raw_text = await asyncio.to_thread(_generate_analysis, client, uploaded_file, prompt)
+        response = await asyncio.to_thread(_generate_analysis, client, uploaded_file, prompt)
+
+        # Extract usage metadata
+        meta = getattr(response, "usage_metadata", None)
+        if meta:
+            input_tokens = getattr(meta, "prompt_token_count", 0) or 0
+            output_tokens = getattr(meta, "candidates_token_count", 0) or 0
+            usage = _estimate_cost(input_tokens, output_tokens, settings.gemini_model)
+            logger.info(
+                f"Gemini usage: {usage.input_tokens} input + {usage.output_tokens} output "
+                f"= {usage.total_tokens} tokens (${usage.estimated_cost_usd:.4f} USD)"
+            )
+
+        raw_text = response.text.strip()
 
         # Parse
         cortes = _parse_cortes(raw_text)
@@ -285,4 +353,4 @@ async def analyze_video(
         total = sum(s.end - s.start for s in c.segments)
         logger.info(f"  Corte {c.corte_number} '{c.title}': {len(c.segments)} segments, {total:.0f}s total")
 
-    return cortes
+    return AnalysisResult(cortes=cortes, usage=usage)
