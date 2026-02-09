@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
     telegram_allowed_users: str = ""
     telegram_default_drive_folder: str = ""
+    telegram_default_webhook_url: str = ""
 
     # --- Auth ---
     api_key: str = "changeme-default-key-2024"

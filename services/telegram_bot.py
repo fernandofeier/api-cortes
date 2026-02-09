@@ -3,7 +3,9 @@ import logging
 import os
 import shutil
 import tempfile
+from datetime import datetime, timezone
 
+import httpx
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Per-user folder mapping (in-memory, resets on restart)
 # ---------------------------------------------------------------------------
 _user_folders: dict[int, str] = {}
+_user_webhooks: dict[int, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +40,10 @@ def _is_authorized(user_id: int) -> bool:
 
 def _get_folder_for_user(user_id: int) -> str | None:
     return _user_folders.get(user_id) or settings.telegram_default_drive_folder or None
+
+
+def _get_webhook_for_user(user_id: int) -> str | None:
+    return _user_webhooks.get(user_id) or settings.telegram_default_webhook_url or None
 
 
 def _format_size(size_bytes: int) -> str:
@@ -62,7 +69,10 @@ async def _handle_start(client: Client, message: Message):
         return
 
     folder = _get_folder_for_user(message.from_user.id)
-    folder_text = f"`{folder}`" if folder else "raiz do Drive (nenhuma pasta configurada)"
+    folder_text = f"`{folder}`" if folder else "raiz do Drive"
+
+    webhook = _get_webhook_for_user(message.from_user.id)
+    webhook_text = f"`{webhook}`" if webhook else "nenhum"
 
     await message.reply_text(
         "Bem-vindo ao **Video Uploader Bot**!\n\n"
@@ -70,8 +80,12 @@ async def _handle_start(client: Client, message: Message):
         "automaticamente para o Google Drive.\n\n"
         "**Comandos:**\n"
         "/pasta `<folder_id>` — Define a pasta do Drive\n"
-        "/pasta — Mostra a pasta atual\n\n"
-        f"**Pasta atual:** {folder_text}",
+        "/pasta — Mostra a pasta atual\n"
+        "/webhook `<url>` — Define URL de notificacao\n"
+        "/webhook — Mostra o webhook atual\n"
+        "/webhook off — Desativa o webhook\n\n"
+        f"**Pasta atual:** {folder_text}\n"
+        f"**Webhook:** {webhook_text}",
     )
 
 
@@ -100,6 +114,75 @@ async def _handle_pasta(client: Client, message: Message):
     logger.info(f"User {user_id} set Drive folder to {folder_id}")
 
 
+async def _handle_webhook(client: Client, message: Message):
+    if not _is_authorized(message.from_user.id):
+        await message.reply_text("Voce nao tem permissao para usar este bot.")
+        return
+
+    user_id = message.from_user.id
+    parts = message.text.strip().split(maxsplit=1)
+
+    if len(parts) < 2:
+        webhook = _get_webhook_for_user(user_id)
+        if webhook:
+            await message.reply_text(f"Webhook atual: `{webhook}`")
+        else:
+            await message.reply_text(
+                "Nenhum webhook configurado.\n"
+                "Use /webhook <url> para definir."
+            )
+        return
+
+    value = parts[1].strip()
+
+    if value.lower() == "off":
+        _user_webhooks.pop(user_id, None)
+        await message.reply_text("Webhook desativado.")
+        logger.info(f"User {user_id} disabled webhook")
+        return
+
+    if not value.startswith(("http://", "https://")):
+        await message.reply_text("URL invalida. Use uma URL que comece com http:// ou https://")
+        return
+
+    _user_webhooks[user_id] = value
+    await message.reply_text(f"Webhook definido: `{value}`")
+    logger.info(f"User {user_id} set webhook to {value}")
+
+
+async def _send_webhook_notification(
+    webhook_url: str,
+    drive_result: dict,
+    file_name: str,
+    file_size: int,
+    caption: str | None,
+    user_id: int,
+) -> None:
+    payload = {
+        "event": "telegram_upload",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": user_id,
+        "file": {
+            "name": file_name,
+            "size_bytes": file_size,
+            "size_human": _format_size(file_size),
+        },
+        "drive": {
+            "file_id": drive_result.get("id"),
+            "file_name": drive_result.get("name"),
+            "web_view_link": drive_result.get("webViewLink"),
+        },
+        "caption": caption,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.webhook_timeout) as client:
+            resp = await client.post(webhook_url, json=payload)
+            logger.info(f"Webhook sent to {webhook_url} — status {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Webhook to {webhook_url} failed: {e}")
+
+
 async def _handle_video(client: Client, message: Message):
     if not _is_authorized(message.from_user.id):
         await message.reply_text("Voce nao tem permissao para usar este bot.")
@@ -114,6 +197,7 @@ async def _handle_video(client: Client, message: Message):
     file_name = media.file_name or f"telegram-video-{message.id}.mp4"
     file_size = media.file_size or 0
     size_text = _format_size(file_size) if file_size else "tamanho desconhecido"
+    caption = message.caption
 
     logger.info(f"User {user_id} sent file: {file_name} ({size_text})")
 
@@ -143,12 +227,25 @@ async def _handle_video(client: Client, message: Message):
         drive_name = drive_result.get("name", file_name)
         drive_id = drive_result.get("id", "?")
 
+        webhook_url = _get_webhook_for_user(user_id)
+        webhook_status = ""
+        if webhook_url:
+            await _send_webhook_notification(
+                webhook_url=webhook_url,
+                drive_result=drive_result,
+                file_name=file_name,
+                file_size=actual_size,
+                caption=caption,
+                user_id=user_id,
+            )
+            webhook_status = "\n**Webhook:** enviado"
+
         await status_msg.edit_text(
             f"Concluido!\n\n"
             f"**Arquivo:** `{drive_name}`\n"
             f"**Tamanho:** {_format_size(actual_size)}\n"
             f"**Drive ID:** `{drive_id}`\n"
-            f"**Link:** {link}",
+            f"**Link:** {link}{webhook_status}",
         )
         logger.info(f"Upload complete: {drive_name} -> {link}")
 
@@ -202,6 +299,7 @@ async def start_telegram_bot() -> bool:
         # Register handlers
         _client.on_message(filters.command("start") & filters.private)(_handle_start)
         _client.on_message(filters.command("pasta") & filters.private)(_handle_pasta)
+        _client.on_message(filters.command("webhook") & filters.private)(_handle_webhook)
         _client.on_message(
             (filters.video | filters.document) & filters.private
         )(_handle_video)
