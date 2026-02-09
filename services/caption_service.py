@@ -13,14 +13,18 @@ from services.video_engine import burn_captions
 logger = logging.getLogger(__name__)
 
 TRANSCRIPTION_PROMPT = """\
-Transcribe the audio with precise timestamps per phrase.
+Transcribe the audio with word-level precise timestamps.
 Return ONLY a JSON array, no markdown, no code fences. Format:
-[{"start": 0.0, "end": 2.5, "text": "phrase here"}, ...]
+[{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
-Rules:
-- Each block must have at most 6 words
-- Timestamps in seconds with 1 decimal place
-- If there is no speech, return []
+Critical rules:
+- Maximum 4 words per block — shorter blocks are better for sync
+- Timestamps in seconds with 2 decimal places (e.g. 1.25, not 1.2)
+- "start" must be the EXACT moment the first word begins being spoken
+- "end" must be the EXACT moment the last word finishes being spoken
+- Do NOT add padding before start or after end — timestamps must be tight to the speech
+- If there is a pause between phrases, the next block starts when speech resumes, not before
+- If there is no speech at all, return []
 - Transcribe in the original language of the audio
 """
 
@@ -130,7 +134,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,68,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,320,1
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,320,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
