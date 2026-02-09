@@ -13,25 +13,21 @@ from services.video_engine import burn_captions
 logger = logging.getLogger(__name__)
 
 TRANSCRIPTION_PROMPT = """\
-Transcribe ONLY the spoken words in this audio with precise timestamps.
-Return ONLY a JSON array, no markdown, no code fences. Format:
+Transcribe the spoken words in this audio with precise timestamps.
+Return ONLY a JSON array, no markdown, no code fences.
 [{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
-TIMING rules (critical for subtitle sync):
-- "start" = exact moment the first word BEGINS being spoken (never before)
-- "end" = exact moment the last word FINISHES being spoken (never after)
-- Timestamps in seconds with 2 decimal places
-- Do NOT round timestamps to whole or half seconds — be precise
-- It is better to be 0.1s LATE than 0.1s EARLY on start times
-
-CONTENT rules:
-- Maximum 3 words per block — fewer words = better synchronization
-- ONLY transcribe actual human speech — ignore music, sound effects, breathing, background noise
-- If nobody is speaking, do NOT generate any block for that time period
-- Silence gaps between phrases must have NO blocks at all
-- Pay close attention to proper nouns and names — spell them correctly
+Rules:
+- Each block: 2 to 5 words maximum
+- Timestamps in seconds with 2 decimal places (e.g. 1.25, 3.80)
+- "start" = when the first word begins being spoken
+- "end" = when the last word finishes being spoken
+- Do not add extra time before or after the actual speech
+- Only transcribe human speech, ignore music and sound effects
+- No blocks during silence — only when someone is speaking
+- Pay attention to proper nouns and character names
 - Transcribe in the original language of the audio
-- If there is no speech at all, return []
+- If no speech, return []
 """
 
 GEMINI_POLL_TIMEOUT = 300
@@ -134,8 +130,10 @@ def _postprocess_transcription(blocks: list[dict]) -> list[dict]:
     # Sort by start time
     blocks.sort(key=lambda b: b["start"])
 
-    # Filter out very short blocks (< 0.2s) — usually hallucinations
-    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.20]
+    initial_count = len(blocks)
+
+    # Filter out very short blocks (< 0.15s) — usually hallucinations
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.15]
 
     # Remove overlaps: each block's end must not exceed next block's start
     for i in range(len(blocks) - 1):
@@ -144,9 +142,9 @@ def _postprocess_transcription(blocks: list[dict]) -> list[dict]:
             blocks[i]["end"] = next_start
 
     # After trimming, remove blocks that became too short
-    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.10]
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.08]
 
-    logger.info(f"Post-processing: {len(blocks)} blocks after cleanup")
+    logger.info(f"Post-processing: {initial_count} -> {len(blocks)} blocks")
     return blocks
 
 
