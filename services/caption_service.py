@@ -13,19 +13,25 @@ from services.video_engine import burn_captions
 logger = logging.getLogger(__name__)
 
 TRANSCRIPTION_PROMPT = """\
-Transcribe the audio with word-level precise timestamps.
+Transcribe ONLY the spoken words in this audio with precise timestamps.
 Return ONLY a JSON array, no markdown, no code fences. Format:
 [{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
-Critical rules:
-- Maximum 4 words per block — shorter blocks are better for sync
-- Timestamps in seconds with 2 decimal places (e.g. 1.25, not 1.2)
-- "start" must be the EXACT moment the first word begins being spoken
-- "end" must be the EXACT moment the last word finishes being spoken
-- Do NOT add padding before start or after end — timestamps must be tight to the speech
-- If there is a pause between phrases, the next block starts when speech resumes, not before
-- If there is no speech at all, return []
+TIMING rules (critical for subtitle sync):
+- "start" = exact moment the first word BEGINS being spoken (never before)
+- "end" = exact moment the last word FINISHES being spoken (never after)
+- Timestamps in seconds with 2 decimal places
+- Do NOT round timestamps to whole or half seconds — be precise
+- It is better to be 0.1s LATE than 0.1s EARLY on start times
+
+CONTENT rules:
+- Maximum 3 words per block — fewer words = better synchronization
+- ONLY transcribe actual human speech — ignore music, sound effects, breathing, background noise
+- If nobody is speaking, do NOT generate any block for that time period
+- Silence gaps between phrases must have NO blocks at all
+- Pay close attention to proper nouns and names — spell them correctly
 - Transcribe in the original language of the audio
+- If there is no speech at all, return []
 """
 
 GEMINI_POLL_TIMEOUT = 300
@@ -115,6 +121,35 @@ def _transcribe(client: genai.Client, uploaded_file) -> list[dict]:
     return valid
 
 
+def _postprocess_transcription(blocks: list[dict]) -> list[dict]:
+    """
+    Clean up transcription blocks to fix common Gemini timing issues:
+    - Remove very short blocks (likely hallucinations during silence)
+    - Remove overlaps so only one subtitle shows at a time
+    - Ensure sequential ordering
+    """
+    if not blocks:
+        return blocks
+
+    # Sort by start time
+    blocks.sort(key=lambda b: b["start"])
+
+    # Filter out very short blocks (< 0.2s) — usually hallucinations
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.20]
+
+    # Remove overlaps: each block's end must not exceed next block's start
+    for i in range(len(blocks) - 1):
+        next_start = blocks[i + 1]["start"]
+        if blocks[i]["end"] > next_start:
+            blocks[i]["end"] = next_start
+
+    # After trimming, remove blocks that became too short
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.10]
+
+    logger.info(f"Post-processing: {len(blocks)} blocks after cleanup")
+    return blocks
+
+
 def _format_ass_time(seconds: float) -> str:
     """Convert seconds to ASS time format: H:MM:SS.CC"""
     h = int(seconds // 3600)
@@ -131,6 +166,7 @@ ScriptType: v4.00+
 PlayResX: {width}
 PlayResY: {height}
 WrapStyle: 0
+Collisions: Normal
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
@@ -190,10 +226,16 @@ async def add_captions(video_path: str, work_dir: str) -> str:
         logger.info("No speech detected, skipping captions")
         return video_path
 
-    # Step 4: Generate ASS file
+    # Step 4: Post-process timestamps (remove overlaps, ghost blocks)
+    transcription = _postprocess_transcription(transcription)
+    if not transcription:
+        logger.info("No valid blocks after post-processing, skipping captions")
+        return video_path
+
+    # Step 5: Generate ASS file
     _generate_ass(transcription, ass_path)
 
-    # Step 5: Burn captions into video
+    # Step 6: Burn captions into video
     await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
 
     return captioned_path
