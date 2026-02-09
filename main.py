@@ -75,6 +75,10 @@ class ProcessingOptions(BaseModel):
         False,
         description="Horizontal flip (mirror) the video — useful for copyright avoidance",
     )
+    captions: bool = Field(
+        False,
+        description="Generate burned-in captions/subtitles via Gemini transcription",
+    )
 
 
 class ProcessRequest(BaseModel):

@@ -328,3 +328,50 @@ def process_video(
 
     logger.info(f"FFmpeg processing complete: {output_path}")
     return output_path
+
+
+def burn_captions(
+    video_path: str,
+    ass_path: str,
+    output_path: str,
+) -> str:
+    """
+    Burn ASS subtitles into video (second-pass FFmpeg).
+
+    Re-encodes video with subtitle overlay; audio is copied without re-encoding.
+    """
+    # Escape special characters in path for FFmpeg filter syntax
+    escaped_ass = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    cmd = [
+        settings.ffmpeg_path,
+        "-y",
+        "-i", video_path,
+        "-vf", f"ass='{escaped_ass}'",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-b:v", settings.video_bitrate,
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    logger.info(f"Burning captions: {ass_path} -> {output_path}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    if result.returncode != 0:
+        logger.error(f"FFmpeg caption burn stderr:\n{result.stderr}")
+        raise RuntimeError(
+            f"FFmpeg caption burn failed (code {result.returncode}): "
+            f"{result.stderr[-1000:]}"
+        )
+
+    logger.info(f"Captions burned successfully: {output_path}")
+    return output_path

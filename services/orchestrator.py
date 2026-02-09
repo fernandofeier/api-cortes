@@ -10,6 +10,7 @@ from core.config import settings
 from core.job_store import JobStep, get_job
 from services.drive_service import download_file, upload_file
 from services.gemini_service import AnalysisResult, Corte, analyze_video
+from services.caption_service import add_captions
 from services.video_engine import Segment, VideoOptions, process_video
 from utils.webhook_sender import send_webhook
 
@@ -104,6 +105,11 @@ async def process_video_pipeline(
             if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
                 logger.error(f"[{job_id}] Empty output for {corte_label}")
                 continue
+
+            # Captions (optional)
+            if options and options.captions:
+                _update_job(job_id, JobStep.PROCESSING, f"Gerando legendas para {corte_label}...")
+                output_path = await add_captions(output_path, work_dir)
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {corte_label} complete: {output_size_mb:.1f} MB")
@@ -265,6 +271,11 @@ async def manual_cut_pipeline(
                 logger.error(f"[{job_id}] Empty output for {clip_label}")
                 continue
 
+            # Captions (optional)
+            if options and options.captions:
+                _update_job(job_id, JobStep.PROCESSING, f"Gerando legendas para {clip_label}...")
+                output_path = await add_captions(output_path, work_dir)
+
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {clip_label} complete: {output_size_mb:.1f} MB")
 
@@ -416,6 +427,11 @@ async def manual_edit_pipeline(
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             raise RuntimeError("FFmpeg produced empty output")
+
+        # Captions (optional)
+        if options and options.captions:
+            _update_job(job_id, JobStep.PROCESSING, "Gerando legendas...")
+            output_path = await add_captions(output_path, work_dir)
 
         output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
         logger.info(f"[{job_id}] Edit complete: {output_size_mb:.1f} MB")

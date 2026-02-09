@@ -1,39 +1,16 @@
 # Viral Video Cutter API
 
-API para gerar cortes virais automaticamente. Envia um video do Google Drive, a IA (Gemini) identifica os melhores momentos, o FFmpeg corta e estiliza em formato 9:16 (TikTok/Reels/Shorts) com fundo blur e transicoes, e o resultado e enviado de volta ao Drive + webhook.
-
-## Arquitetura
-
-```
-POST /v1/process (file_id + webhook_url)
-        |
-        v
-   202 Accepted (job_id)
-        |
-        v  [background]
-   Download do Drive → Gemini analisa → FFmpeg corta → Upload pro Drive → Webhook POST
-```
-
-- **FastAPI** + BackgroundTasks (sem Redis/Celery)
-- **Google Gemini** para analise de video com IA
-- **FFmpeg** para corte, transicoes xfade e estilo visual 9:16
-- **Google Drive** para download/upload via OAuth2
-- **Worker unico** (uvicorn --workers 1) pois BackgroundTasks roda no mesmo processo
+API para gerar cortes virais de videos automaticamente ou manualmente. Processa videos do Google Drive e entrega os resultados no Drive + webhook.
 
 ---
 
 ## Deploy Rapido (Docker)
 
-### 1. Clone o repositorio
+### 1. Clone e configure
 
 ```bash
 git clone <url-do-repo>
 cd api-cortes
-```
-
-### 2. Configure o .env
-
-```bash
 cp .env.example .env
 ```
 
@@ -42,45 +19,22 @@ Edite o `.env`:
 | Variavel | Obrigatorio | Descricao |
 |----------|-------------|-----------|
 | `GEMINI_API_KEY` | Sim | Chave da API Google Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) |
-| `GEMINI_MODEL` | Nao | Modelo Gemini (default: `gemini-2.5-flash`) |
 | `API_KEY` | Sim | Chave para autenticar chamadas a API |
-| `APP_BASE_URL` | Sim* | URL publica da API (ex: `https://api.seudominio.com`). *Necessario para OAuth via painel |
-| `MAX_UPLOAD_SIZE_MB` | Nao | Limite de tamanho de video em MB (default: `2000`). Gemini suporta ate 2 GB |
-| `GOOGLE_DRIVE_TOKEN_JSON` | Nao | Caminho do token OAuth2 (default: `/app/credentials/token.json`) |
-| `TEMP_DIR` | Nao | Diretorio temporario (default: `/tmp/video-cutter`) |
-| `LOG_LEVEL` | Nao | Nivel de log (default: `INFO`) |
+| `APP_BASE_URL` | Sim | URL publica da API (ex: `https://api.seudominio.com`) |
+| `GEMINI_MODEL` | Nao | Modelo para analise de video (default: `gemini-2.5-flash`) |
+| `CAPTION_MODEL` | Nao | Modelo para transcricao de legendas (default: `gemini-2.5-flash-lite`) |
+| `MAX_UPLOAD_SIZE_MB` | Nao | Limite de tamanho de video em MB (default: `2000`) |
 
-### 3. Configure o Google Drive (OAuth2)
-
-Voce precisa de credenciais OAuth2 para o Google Drive.
-
-#### Criando as credenciais no Google Cloud Console
+### 2. Configure o Google Drive (OAuth2)
 
 1. Acesse [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
-2. Crie um projeto (ou use um existente)
-3. Ative a **Google Drive API** em "APIs & Services" > "Enable APIs"
-4. Va em "Credentials" > "Create Credentials" > "OAuth client ID"
-5. Se pedido, configure a tela de consentimento (tipo "External", adicione seu email como test user)
+2. Crie um projeto e ative a **Google Drive API**
+3. Crie credenciais OAuth2:
+   - **Docker local**: tipo "Desktop app"
+   - **Painel (Easypanel, Coolify, etc)**: tipo "Web application" com redirect URI `{APP_BASE_URL}/auth/drive/callback`
+4. Baixe o JSON
 
-**Escolha o tipo de cliente conforme seu deploy:**
-
-| Deploy | Tipo de cliente OAuth | Redirect URI |
-|--------|----------------------|--------------|
-| Docker local (terminal) | Desktop app | Nenhum necessario |
-| Easypanel / Coolify / Portainer | Web application | `{APP_BASE_URL}/auth/drive/callback` |
-
-6. Baixe o JSON (botao de download no Google Cloud Console)
-
-#### Enviando o client_secret.json
-
-**Opcao A — Via volume (Docker local):**
-
-```bash
-mkdir -p credentials
-# Coloque o client_secret.json na pasta credentials/
-```
-
-**Opcao B — Via API (paineis sem terminal):**
+**Enviar credenciais via API (paineis sem terminal):**
 
 ```bash
 curl -X POST {APP_BASE_URL}/v1/upload-credentials \
@@ -88,131 +42,32 @@ curl -X POST {APP_BASE_URL}/v1/upload-credentials \
   -F "file=@client_secret.json"
 ```
 
-O arquivo sera salvo automaticamente no local correto dentro do container, com o nome correto.
+**Autorizar o Drive:**
 
-#### Autorizando o Drive
+- **Via terminal**: `python3 scripts/auth_drive.py`
+- **Via navegador**: acesse `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY`
 
-**Opcao A — Via terminal (Docker local):**
-
-```bash
-pip3 install google-auth-oauthlib
-python3 scripts/auth_drive.py
-# Um navegador abrira → autorize → token.json sera gerado
-```
-
-**Opcao B — Via navegador (paineis sem terminal):**
-
-1. Certifique-se que `APP_BASE_URL` esta correto no `.env`
-2. Suba o container
-3. Envie o `client_secret.json` via API (passo anterior)
-4. Acesse no navegador: `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY`
-5. Sera redirecionado ao Google → autorize → token salvo automaticamente
-
-### 4. Suba o container
+### 3. Suba o container
 
 ```bash
 docker compose up -d --build
-```
-
-Verifique se esta rodando:
-
-```bash
 curl http://localhost:8000/
 # {"status":"ok","version":"1.0.0"}
 ```
 
 ---
 
-## Deploy em Paineis (Easypanel, Coolify, Portainer)
-
-### Easypanel
-
-1. Crie um servico do tipo **Docker**
-2. Aponte para o repositorio Git
-3. Em **Environment Variables**, adicione todas as variaveis do `.env`
-4. Em **Volumes**, monte `./credentials` em `/app/credentials`
-5. Configure o dominio e defina `APP_BASE_URL` com o dominio completo
-6. Acesse `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY` para autorizar o Drive
-
-### Coolify
-
-1. Crie um novo recurso > Docker Compose
-2. Cole o conteudo do `docker-compose.yml`
-3. Configure as variaveis de ambiente
-4. Monte o volume de credentials
-5. Adicione o dominio e configure `APP_BASE_URL`
-6. Autorize o Drive via navegador
-
-### Portainer
-
-1. Stacks > Add Stack
-2. Use o docker-compose.yml (Git ou upload)
-3. Configure as variaveis de ambiente
-4. Certifique-se que o volume `credentials` esta acessivel
-5. Autorize o Drive via navegador
-
-### Cloudflare Tunnel
-
-Para usar com Cloudflare Tunnel, descomente a secao `networks` no `docker-compose.yml`:
-
-```yaml
-services:
-  api:
-    # ... (configuracao existente)
-    networks:
-      - tunnel
-
-networks:
-  tunnel:
-    external: true
-```
-
----
-
 ## Endpoints
 
-### Autenticacao
-
-Todas as chamadas `/v1/*` exigem o header:
-
-```
-X-API-Key: sua-api-key-aqui
-```
-
-### GET /
-
-Health check (publico, sem autenticacao).
-
-```bash
-curl http://localhost:8000/
-```
-
-```json
-{"status": "ok", "version": "1.0.0"}
-```
+Todas as chamadas `/v1/*` exigem o header `X-API-Key`.
 
 ### POST /v1/process
 
-Inicia o processamento de um video. Retorna 202 imediatamente.
+Corte automatico com IA. Envia um video e recebe os melhores momentos cortados.
 
-**Headers:**
-```
-Content-Type: application/json
-X-API-Key: sua-api-key
-```
-
-**Body (minimo):**
 ```json
 {
   "file_id": "1ABC123def456",
-  "webhook_url": "https://seu-servidor.com/webhook"
-}
-```
-
-**Body (completo com opcoes):**
-```json
-{
-  "file_id": "https://drive.google.com/file/d/1ABC123def456/view",
   "webhook_url": "https://seu-servidor.com/webhook",
   "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
   "gemini_prompt_instruction": "Foque em momentos engracados",
@@ -223,140 +78,58 @@ X-API-Key: sua-api-key
     "fade_duration": 1.0,
     "width": 1080,
     "height": 1920,
-    "mirror": false
+    "mirror": false,
+    "captions": true
   }
 }
 ```
-
-**Campos do body:**
-
-| Campo | Tipo | Obrigatorio | Descricao |
-|-------|------|-------------|-----------|
-| `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa do Drive) |
-| `webhook_url` | string | Sim | URL para receber o resultado via POST |
-| `drive_folder_id` | string | Nao | ID da pasta no Google Drive para upload dos cortes. Se omitido, salva na raiz do Drive |
-| `gemini_prompt_instruction` | string | Nao | Instrucao extra para a IA na analise |
-| `options` | object | Nao | Opcoes de processamento (veja abaixo) |
-
-**Campos de `options`:**
-
-| Campo | Tipo | Default | Min | Max | Descricao |
-|-------|------|---------|-----|-----|-----------|
-| `layout` | string | `blur_zoom` | - | - | Preset de layout do video (veja tabela abaixo) |
-| `max_clips` | int | 1 | 1 | 10 | Quantidade de cortes (multi-clip requer video > 10 min) |
-| `zoom_level` | int | 1400 | 500 | 3000 | Largura do zoom no foreground (pixels, so aplica no layout `blur_zoom`) |
-| `fade_duration` | float | 1.0 | 0.0 | 5.0 | Duracao da transicao entre segmentos (segundos) |
-| `width` | int | 1080 | 360 | 3840 | Largura do video de saida |
-| `height` | int | 1920 | 360 | 3840 | Altura do video de saida |
-| `mirror` | bool | false | - | - | Espelhar video horizontalmente (anti-copyright) |
-
-**Layouts disponiveis:**
-
-| Layout | Descricao |
-|--------|-----------|
-| `blur_zoom` | **Padrao.** Fundo blur + video com zoom centralizado + formato vertical 9:16 |
-| `vertical` | Corte vertical simples do centro do video, sem blur |
-| `horizontal` | Mantem o formato original do video, sem alterar resolucao |
-| `blur` | Fundo blur + video original centralizado (sem zoom) |
-
-**Resposta 202:**
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "accepted",
-  "message": "Video processing started. Results will be sent to https://..."
-}
-```
-
-### POST /v1/manual-cut
-
-Corte manual de video — sem IA, voce envia os timestamps exatos. Cada clip vira um video separado no Drive.
-
-**Headers:**
-```
-Content-Type: application/json
-X-API-Key: sua-api-key
-```
-
-**Body:**
-```json
-{
-  "file_id": "1ABC123def456",
-  "webhook_url": "https://seu-servidor.com/webhook",
-  "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
-  "clips": [
-    {"start": "5:52", "end": "6:10", "title": "Momento engracado"},
-    {"start": "8:29", "end": "10:24"}
-  ],
-  "options": {
-    "layout": "blur_zoom",
-    "mirror": false
-  }
-}
-```
-
-**Campos do body:**
 
 | Campo | Tipo | Obrigatorio | Descricao |
 |-------|------|-------------|-----------|
 | `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa) |
 | `webhook_url` | string | Sim | URL para receber o resultado via POST |
 | `drive_folder_id` | string | Nao | Pasta no Drive para upload. Se omitido, salva na raiz |
-| `clips` | array | Sim | Array de clips com timestamps (1 a 20 clips) |
-| `clips[].start` | string/float | Sim | Inicio do clip — `"5:52"` ou `352` (segundos) |
-| `clips[].end` | string/float | Sim | Fim do clip — `"6:10"` ou `370` (segundos) |
-| `clips[].title` | string | Nao | Titulo opcional do clip |
-| `options` | object | Nao | Opcoes de layout, mirror, etc (mesmas do `/v1/process`) |
+| `gemini_prompt_instruction` | string | Nao | Instrucao extra para a IA |
+| `options` | object | Nao | Opcoes de processamento (veja abaixo) |
 
-**Resposta 202:**
-```json
-{
-  "job_id": "550e8400-...",
-  "status": "accepted",
-  "message": "Manual cut started (2 clips). Results will be sent to https://..."
-}
-```
+### POST /v1/manual-cut
 
-**Webhook de sucesso:**
-```json
-{
-  "job_id": "550e8400-...",
-  "status": "completed",
-  "original_file_id": "1ABC123def456",
-  "result": {
-    "total_clips": 2,
-    "generated_clips": [
-      {
-        "clip_number": 1,
-        "title": "Momento engracado",
-        "file_id": "1XYZ789...",
-        "file_name": "clip-550e8400-1.mp4",
-        "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",
-        "start": 352.0,
-        "end": 370.0,
-        "output_size_mb": 3.21
-      }
-    ]
-  }
-}
-```
+Corte manual — voce envia os timestamps, cada clip vira um video separado.
 
-### POST /v1/manual-edit
-
-Edicao manual de video — combina multiplos segmentos em **um unico video** com transicoes de crossfade entre eles. Funciona como a IA faz, porem com timestamps manuais.
-
-**Headers:**
-```
-Content-Type: application/json
-X-API-Key: sua-api-key
-```
-
-**Body:**
 ```json
 {
   "file_id": "1ABC123def456",
   "webhook_url": "https://seu-servidor.com/webhook",
-  "drive_folder_id": "1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3",
+  "clips": [
+    {"start": "5:52", "end": "6:10", "title": "Momento engracado"},
+    {"start": "8:29", "end": "10:24"}
+  ],
+  "options": {
+    "layout": "blur_zoom",
+    "captions": true
+  }
+}
+```
+
+| Campo | Tipo | Obrigatorio | Descricao |
+|-------|------|-------------|-----------|
+| `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa) |
+| `webhook_url` | string | Sim | URL para receber o resultado via POST |
+| `drive_folder_id` | string | Nao | Pasta no Drive para upload |
+| `clips` | array | Sim | Array de clips com timestamps (1 a 20) |
+| `clips[].start` | string/float | Sim | Inicio — `"5:52"` ou `352` (segundos) |
+| `clips[].end` | string/float | Sim | Fim — `"6:10"` ou `370` (segundos) |
+| `clips[].title` | string | Nao | Titulo do clip |
+| `options` | object | Nao | Opcoes de processamento |
+
+### POST /v1/manual-edit
+
+Edicao manual — combina multiplos segmentos em **um unico video** com transicoes de crossfade.
+
+```json
+{
+  "file_id": "1ABC123def456",
+  "webhook_url": "https://seu-servidor.com/webhook",
   "title": "Melhores momentos",
   "segments": [
     {"start": "1:20", "end": "1:55"},
@@ -366,64 +139,26 @@ X-API-Key: sua-api-key
   "options": {
     "layout": "blur_zoom",
     "fade_duration": 1.0,
-    "mirror": false
+    "captions": true
   }
 }
 ```
-
-**Campos do body:**
 
 | Campo | Tipo | Obrigatorio | Descricao |
 |-------|------|-------------|-----------|
 | `file_id` | string | Sim | ID do arquivo no Drive (ou URL completa) |
 | `webhook_url` | string | Sim | URL para receber o resultado via POST |
-| `drive_folder_id` | string | Nao | Pasta no Drive para upload. Se omitido, salva na raiz |
+| `drive_folder_id` | string | Nao | Pasta no Drive para upload |
 | `title` | string | Nao | Titulo do video de saida |
 | `segments` | array | Sim | Array de segmentos para combinar (1 a 20) |
-| `segments[].start` | string/float | Sim | Inicio do segmento — `"5:52"` ou `352` (segundos) |
-| `segments[].end` | string/float | Sim | Fim do segmento — `"6:10"` ou `370` (segundos) |
-| `options` | object | Nao | Opcoes de layout, fade_duration, mirror, etc (mesmas do `/v1/process`) |
-
-**Resposta 202:**
-```json
-{
-  "job_id": "550e8400-...",
-  "status": "accepted",
-  "message": "Manual edit started (3 segments → 1 video). Results will be sent to https://..."
-}
-```
-
-**Webhook de sucesso:**
-```json
-{
-  "job_id": "550e8400-...",
-  "status": "completed",
-  "original_file_id": "1ABC123def456",
-  "result": {
-    "title": "Melhores momentos",
-    "file_id": "1XYZ789...",
-    "file_name": "edit-550e8400.mp4",
-    "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",
-    "segments": [
-      {"start": 80.0, "end": 115.0},
-      {"start": 352.0, "end": 370.0},
-      {"start": 720.0, "end": 765.0}
-    ],
-    "total_segments": 3,
-    "output_size_mb": 12.34
-  }
-}
-```
+| `segments[].start` | string/float | Sim | Inicio do segmento |
+| `segments[].end` | string/float | Sim | Fim do segmento |
+| `options` | object | Nao | Opcoes de processamento |
 
 ### GET /v1/status/{job_id}
 
-Consulta o status de um job em andamento.
+Consulta o status de um job.
 
-```bash
-curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
-```
-
-**Resposta:**
 ```json
 {
   "job_id": "550e8400-...",
@@ -435,7 +170,53 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
 
 **Status possiveis:** `queued` → `downloading` → `analyzing` → `processing` → `uploading` → `finishing` → `completed` | `error`
 
-### Webhook Payloads
+### POST /v1/upload-credentials
+
+Envia o `client_secret.json` do Google OAuth via API.
+
+```bash
+curl -X POST http://localhost:8000/v1/upload-credentials \
+  -H "X-API-Key: sua-api-key" \
+  -F "file=@client_secret.json"
+```
+
+### GET /auth/drive?key=SUA_API_KEY
+
+Pagina web para autorizar o Google Drive via navegador.
+
+---
+
+## Opcoes de Processamento
+
+Disponiveis em todos os endpoints via campo `options`:
+
+| Campo | Tipo | Default | Descricao |
+|-------|------|---------|-----------|
+| `layout` | string | `blur_zoom` | Preset de layout (veja tabela abaixo) |
+| `max_clips` | int | 1 | Quantidade de cortes (so `/v1/process`, requer video > 10 min) |
+| `zoom_level` | int | 1400 | Largura do zoom no foreground em pixels (so `blur_zoom`) |
+| `fade_duration` | float | 1.0 | Duracao da transicao entre segmentos (segundos) |
+| `width` | int | 1080 | Largura do video de saida |
+| `height` | int | 1920 | Altura do video de saida |
+| `mirror` | bool | false | Espelhar video horizontalmente |
+| `captions` | bool | false | Gerar legendas automaticas (burned-in) |
+
+### Layouts
+
+| Layout | Descricao |
+|--------|-----------|
+| `blur_zoom` | Fundo blur + video com zoom centralizado (9:16) |
+| `vertical` | Corte vertical simples do centro, sem blur |
+| `horizontal` | Mantem o formato original do video |
+| `blur` | Fundo blur + video original centralizado (sem zoom) |
+
+### Legendas (`captions: true`)
+
+Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao queimadas no video com estilo viral (texto grande, branco, bold, outline preto). Se o video nao tiver fala, retorna sem legendas normalmente.
+
+---
+
+## Webhooks
 
 **Sucesso:**
 ```json
@@ -444,7 +225,7 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
   "status": "completed",
   "original_file_id": "1ABC123def456",
   "result": {
-    "total_clips": 2,
+    "total_clips": 1,
     "generated_clips": [
       {
         "corte_number": 1,
@@ -458,15 +239,7 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
         ],
         "output_size_mb": 8.45
       }
-    ],
-    "usage": {
-      "input_tokens": 48250,
-      "output_tokens": 320,
-      "total_tokens": 48570,
-      "model": "gemini-3-flash-preview",
-      "estimated_cost_usd": 0.025085,
-      "estimated_cost_brl": 0.1455
-    }
+    ]
   }
 }
 ```
@@ -478,116 +251,25 @@ curl -H "X-API-Key: sua-api-key" http://localhost:8000/v1/status/{job_id}
   "status": "error",
   "original_file_id": "1ABC123def456",
   "error": {
-    "message": "Gemini returned no viable cortes",
+    "message": "Descricao do erro",
     "type": "RuntimeError"
   }
 }
-```
-
-### POST /v1/upload-credentials
-
-Envia o `client_secret.json` do Google OAuth via API (para paineis sem acesso a volumes).
-
-**Headers:**
-```
-X-API-Key: sua-api-key
-```
-
-```bash
-curl -X POST http://localhost:8000/v1/upload-credentials \
-  -H "X-API-Key: sua-api-key" \
-  -F "file=@client_secret.json"
-```
-
-**Resposta 200:**
-```json
-{
-  "status": "ok",
-  "message": "client_secret.json saved successfully. Now authorize Google Drive at: ..."
-}
-```
-
-### GET /auth/drive?key=SUA_API_KEY
-
-Pagina web para autorizar o Google Drive via navegador (para paineis sem terminal).
-
-### GET /auth/drive/callback
-
-Callback do OAuth2 (Google redireciona automaticamente para ca).
-
----
-
-## Seguranca
-
-- **API Key**: Toda chamada `/v1/*` exige `X-API-Key` no header. Comparacao timing-safe contra ataques de temporalizacao.
-- **Credenciais Google**: Ficam no servidor (`.env` + `credentials/`), nunca expostas ao cliente.
-- **OAuth2 token**: Refresh token salvo em `token.json` dentro do container, auto-refresh quando expira.
-- **Gemini cleanup**: Arquivos uploaded ao Gemini sao sempre deletados (try/finally), mesmo em caso de erro. Timeout de 10 min no processamento.
-- **Limpeza de disco**: Todos os arquivos temporarios (downloads, cortes) sao apagados apos cada job (sucesso ou erro). No startup, restos de execucoes anteriores sao removidos automaticamente.
-- **Webhook retry**: Backoff exponencial (2s, 4s, 8s), sem retry em erros 4xx.
-- **Limite de tamanho**: Videos acima do limite configurado (`MAX_UPLOAD_SIZE_MB`) sao rejeitados antes do upload ao Gemini.
-
----
-
-## Limpeza de Arquivos
-
-A API garante que **nenhum arquivo temporario persista no disco**:
-
-1. **Durante o processamento**: Cada job cria uma pasta temporaria isolada (`job-XXXXXXXX-...`)
-2. **Apos conclusao (sucesso ou erro)**: A pasta e todo seu conteudo sao apagados no bloco `finally` do pipeline
-3. **No startup**: Ao iniciar, o container limpa automaticamente qualquer pasta `job-*` que tenha sobrado de crashes anteriores
-4. **Gemini File API**: Arquivos uploaded ao Gemini sao deletados imediatamente apos a analise (ou em caso de erro)
-
----
-
-## Estrutura do Projeto
-
-```
-api-cortes/
-├── main.py                    # FastAPI app, endpoints, auth
-├── core/
-│   ├── config.py              # Configuracao via .env (pydantic-settings)
-│   └── job_store.py           # Job tracking in-memory
-├── services/
-│   ├── auth_service.py        # OAuth2 web flow para paineis
-│   ├── orchestrator.py        # Pipeline: download → analyze → cut → upload → webhook
-│   ├── video_engine.py        # FFmpeg filter_complex builder
-│   ├── gemini_service.py      # Gemini AI video analysis
-│   └── drive_service.py       # Google Drive download/upload
-├── utils/
-│   └── webhook_sender.py      # Webhook POST com retry
-├── scripts/
-│   └── auth_drive.py          # OAuth2 via terminal (uso local)
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-└── .gitignore
 ```
 
 ---
 
 ## Bot do Telegram (Opcional)
 
-Bot que recebe videos no Telegram e faz upload direto ao Google Drive. Usa o protocolo MTProto (pyrogram) para suportar arquivos ate 2 GB.
-
-### Pre-requisitos
-
-1. **Criar bot no Telegram**: Fale com [@BotFather](https://t.me/BotFather) → `/newbot` → copie o token
-2. **Obter API ID/Hash**: Acesse [my.telegram.org](https://my.telegram.org) → "API development tools" → copie `api_id` e `api_hash`
-3. **Seu User ID do Telegram**: Fale com [@userinfobot](https://t.me/userinfobot) para descobrir seu ID numerico
+Bot que recebe videos no Telegram e faz upload direto ao Google Drive.
 
 ### Configuracao
 
-Adicione ao `.env`:
+1. Crie um bot via [@BotFather](https://t.me/BotFather) → copie o token
+2. Acesse [my.telegram.org](https://my.telegram.org) → copie `API_ID` e `API_HASH`
+3. Descubra seu User ID via [@userinfobot](https://t.me/userinfobot)
 
-```env
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-TELEGRAM_API_ID=12345678
-TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
-TELEGRAM_ALLOWED_USERS=123456789,987654321
-TELEGRAM_DEFAULT_DRIVE_FOLDER=1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3
-```
+Adicione ao `.env`:
 
 | Variavel | Obrigatorio | Descricao |
 |----------|-------------|-----------|
@@ -595,34 +277,26 @@ TELEGRAM_DEFAULT_DRIVE_FOLDER=1P1c90AFvvS2j-ZJajiVskuusu0WrsLc3
 | `TELEGRAM_API_ID` | Sim | API ID (my.telegram.org) |
 | `TELEGRAM_API_HASH` | Sim | API Hash (my.telegram.org) |
 | `TELEGRAM_ALLOWED_USERS` | Sim | IDs dos usuarios permitidos (separados por virgula) |
-| `TELEGRAM_DEFAULT_DRIVE_FOLDER` | Nao | Pasta padrao no Drive para uploads |
+| `TELEGRAM_DEFAULT_DRIVE_FOLDER` | Nao | Pasta padrao no Drive |
+| `TELEGRAM_DEFAULT_WEBHOOK_URL` | Nao | URL padrao de webhook apos upload |
 
-Se `TELEGRAM_BOT_TOKEN` estiver vazio, o bot simplesmente nao inicia e a API funciona normalmente.
+Se `TELEGRAM_BOT_TOKEN` estiver vazio, o bot nao inicia e a API funciona normalmente.
 
-### Comandos do Bot
+### Comandos
 
 | Comando | Descricao |
 |---------|-----------|
-| `/start` | Mensagem de boas-vindas e instrucoes |
-| `/pasta <folder_id>` | Define a pasta do Drive para seus uploads |
+| `/start` | Boas-vindas e instrucoes |
+| `/pasta <folder_id>` | Define a pasta do Drive |
 | `/pasta` | Mostra a pasta atual |
+| `/webhook <url>` | Define URL de notificacao apos upload |
+| `/webhook` | Mostra o webhook atual |
+| `/webhook off` | Desativa o webhook |
 
 ### Como Usar
 
-1. Configure as variaveis de ambiente e suba o container
-2. Abra o bot no Telegram (procure pelo nome que voce deu no BotFather)
-3. Envie `/pasta <folder_id>` para definir a pasta do Drive (opcional)
-4. Envie um video ou documento — o bot baixa e envia ao Drive automaticamente
-5. Receba o link do Drive na resposta
-
----
-
-## Limites e Consideracoes
-
-- **Duracao dos cortes**: Cada corte tem no maximo 80 segundos (2-4 segmentos de 10-40s)
-- **Multi-clip**: Requer video com mais de 10 minutos. Videos curtos geram 1 corte independente do `max_clips`
-- **Formato de saida**: MP4, H.264, AAC, 9:16 vertical
-- **Worker unico**: Processa um video por vez. Para escalar, use multiplas instancias atras de um load balancer
-- **Job store in-memory**: Status dos jobs se perde ao reiniciar o container. Jobs expiram automaticamente apos 3 dias
-- **Gemini file processing timeout**: 10 minutos maximo de espera
-- **Tamanho maximo de video**: Configuravel via `MAX_UPLOAD_SIZE_MB` (default: 2000 MB). O Gemini File API suporta ate 2 GB
+1. Configure as variaveis e suba o container
+2. Abra o bot no Telegram
+3. Envie `/pasta <folder_id>` para definir a pasta (opcional)
+4. Envie um video — o bot baixa e envia ao Drive automaticamente
+5. Se tiver webhook configurado, recebe notificacao com detalhes do upload
