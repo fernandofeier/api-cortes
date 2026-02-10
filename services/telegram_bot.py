@@ -157,15 +157,19 @@ async def _send_webhook_notification(
     file_size: int,
     caption: str | None,
     user_id: int,
+    message_id: int = 0,
+    duration: int = 0,
 ) -> None:
     payload = {
         "event": "telegram_upload",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user_id,
+        "message_id": message_id,
         "file": {
             "name": file_name,
             "size_bytes": file_size,
             "size_human": _format_size(file_size),
+            "duration": duration,
         },
         "drive": {
             "file_id": drive_result.get("id"),
@@ -230,6 +234,7 @@ async def _handle_video(client: Client, message: Message):
         webhook_url = _get_webhook_for_user(user_id)
         webhook_status = ""
         if webhook_url:
+            duration = getattr(media, "duration", 0) or 0
             await _send_webhook_notification(
                 webhook_url=webhook_url,
                 drive_result=drive_result,
@@ -237,6 +242,8 @@ async def _handle_video(client: Client, message: Message):
                 file_size=actual_size,
                 caption=caption,
                 user_id=user_id,
+                message_id=message.id,
+                duration=duration,
             )
             webhook_status = "\n**Webhook:** enviado"
 
