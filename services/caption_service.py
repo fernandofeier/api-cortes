@@ -134,15 +134,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 # ---------------------------------------------------------------------------
 
 async def _transcribe_whisper(audio_path: str) -> list[dict]:
-    """Send audio to DeepInfra Whisper API and return transcription blocks."""
-    logger.info(f"Transcribing with Whisper: {audio_path}")
+    """
+    Send audio to DeepInfra Whisper API with word-level timestamps.
+    Returns transcription as subtitle blocks (2-5 words each) with precise timing.
+    """
+    logger.info(f"Transcribing with Whisper (word-level): {audio_path}")
 
     async with httpx.AsyncClient(timeout=120) as client:
         with open(audio_path, "rb") as f:
             response = await client.post(
-                "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo",
+                "https://api.deepinfra.com/v1/audio/transcriptions",
                 headers={"Authorization": f"bearer {settings.deepinfra_api_key}"},
-                files={"audio": (os.path.basename(audio_path), f, "audio/aac")},
+                data={
+                    "model": "openai/whisper-large-v3-turbo",
+                    "response_format": "verbose_json",
+                    "timestamp_granularities[]": "word",
+                },
+                files={"file": (os.path.basename(audio_path), f, "audio/aac")},
             )
 
     if response.status_code != 200:
@@ -153,6 +161,14 @@ async def _transcribe_whisper(audio_path: str) -> list[dict]:
     data = response.json()
     logger.info(f"Whisper response keys: {list(data.keys())}")
 
+    # Word-level timestamps: group into 2-5 word subtitle blocks
+    words = data.get("words", [])
+    if words:
+        logger.info(f"Whisper: {len(words)} words with timestamps")
+        return _group_words_into_blocks(words)
+
+    # Fallback: use segment-level if no word timestamps
+    logger.warning("Whisper: no word-level timestamps, falling back to segments")
     segments = data.get("segments", [])
     blocks = []
     for seg in segments:
@@ -163,34 +179,28 @@ async def _transcribe_whisper(audio_path: str) -> list[dict]:
                 "end": float(seg["end"]),
                 "text": text,
             })
-
-    logger.info(f"Whisper transcription: {len(blocks)} segments")
     return blocks
 
 
-def _split_long_segments(blocks: list[dict], max_words: int = 5) -> list[dict]:
-    """Split segments with more than max_words into smaller subtitle blocks."""
-    result = []
-    for block in blocks:
-        words = block["text"].split()
-        if len(words) <= max_words:
-            result.append(block)
-            continue
-
-        duration = block["end"] - block["start"]
-        time_per_word = duration / len(words)
-
-        for chunk_start_idx in range(0, len(words), max_words):
-            chunk_words = words[chunk_start_idx:chunk_start_idx + max_words]
-            chunk_start = block["start"] + chunk_start_idx * time_per_word
-            chunk_end = chunk_start + len(chunk_words) * time_per_word
-            result.append({
-                "start": round(chunk_start, 2),
-                "end": round(chunk_end, 2),
-                "text": " ".join(chunk_words),
+def _group_words_into_blocks(words: list[dict], max_words: int = 5) -> list[dict]:
+    """
+    Group word-level timestamps into subtitle blocks of 2-5 words.
+    Uses actual word timestamps for precise sync.
+    """
+    blocks = []
+    i = 0
+    while i < len(words):
+        chunk = words[i:i + max_words]
+        text = " ".join(w["word"].strip() for w in chunk if w.get("word", "").strip())
+        if text:
+            blocks.append({
+                "start": float(chunk[0]["start"]),
+                "end": float(chunk[-1]["end"]),
+                "text": text,
             })
+        i += max_words
 
-    return result
+    return blocks
 
 
 async def _add_captions_whisper(video_path: str, work_dir: str) -> str:
@@ -202,17 +212,14 @@ async def _add_captions_whisper(video_path: str, work_dir: str) -> str:
     # Step 1: Extract audio
     await asyncio.to_thread(_extract_audio, video_path, audio_path)
 
-    # Step 2: Transcribe with Whisper
+    # Step 2: Transcribe with Whisper (returns blocks already grouped by word timestamps)
     transcription = await _transcribe_whisper(audio_path)
 
     if not transcription:
         logger.info("Whisper: no speech detected, skipping captions")
         return video_path
 
-    # Step 3: Split long segments into subtitle-sized blocks
-    transcription = _split_long_segments(transcription)
-
-    # Step 4: Post-process (remove overlaps, short blocks)
+    # Step 3: Post-process (remove overlaps, short blocks)
     transcription = _postprocess(transcription)
     if not transcription:
         logger.info("No valid blocks after post-processing, skipping captions")
