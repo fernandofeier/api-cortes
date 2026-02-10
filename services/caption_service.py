@@ -16,20 +16,24 @@ logger = logging.getLogger(__name__)
 GEMINI_POLL_TIMEOUT = 300
 
 TRANSCRIPTION_PROMPT = """\
-Transcribe the spoken dialogue in this audio with precise timestamps.
+Watch this video carefully and transcribe the spoken dialogue with precise timestamps.
+The timestamps MUST match the video timeline exactly — each subtitle must appear at the same moment the words are spoken on screen.
+
 Return ONLY a JSON array, no markdown, no code fences.
 [{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
 Rules:
 - Each block: 2 to 5 words
-- Timestamps in seconds with 2 decimal places
-- "start" = when the first word begins being spoken
-- "end" = when the last word finishes being spoken
+- Timestamps in seconds with 2 decimal places matching the video timeline
+- "start" = the exact video timestamp when the person starts saying that phrase
+- "end" = the exact video timestamp when the person finishes saying that phrase
+- Use scene changes and visual cues to verify your timestamps are correct
+- A subtitle must NEVER appear before the scene where it is spoken
 - IMPORTANT: Transcribe in the language that is ACTUALLY SPOKEN in the audio
 - If the audio is a dub (e.g. Portuguese dub of an English show), transcribe the PORTUGUESE words you hear
 - Do NOT translate — write exactly what you hear
 - Ignore music, sound effects, and background noise
-- No blocks during silence
+- No blocks during silence or scene transitions
 - Pay attention to proper nouns and character names
 - If no speech, return []
 """
@@ -210,24 +214,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 async def add_captions(video_path: str, work_dir: str) -> str:
     """
     Caption pipeline:
-    1. Extract audio from clip
-    2. Send audio to Gemini for transcription with timestamps
-    3. Post-process (remove overlaps, short blocks)
-    4. Generate ASS and burn into video
+    1. Send video to Gemini for transcription with timestamps (visual + audio context)
+    2. Post-process (remove overlaps, short blocks)
+    3. Generate ASS and burn into video
 
     Non-fatal: if anything fails, returns original video without captions.
     """
     try:
-        audio_path = os.path.join(work_dir, "caption-audio.aac")
         ass_path = os.path.join(work_dir, "captions.ass")
         captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
 
-        # Step 1: Extract audio
-        await asyncio.to_thread(_extract_audio, video_path, audio_path)
-
-        # Step 2: Transcribe with Gemini
+        # Step 1: Upload video to Gemini (video = visual context for precise scene-aware timestamps)
         client = genai.Client(api_key=settings.gemini_api_key)
-        uploaded_file = await asyncio.to_thread(_upload_and_wait, client, audio_path)
+        uploaded_file = await asyncio.to_thread(_upload_and_wait, client, video_path)
 
         try:
             transcription = await asyncio.to_thread(_transcribe, client, uploaded_file)
@@ -241,13 +240,13 @@ async def add_captions(video_path: str, work_dir: str) -> str:
             logger.info("No speech detected, skipping captions")
             return video_path
 
-        # Step 3: Post-process
+        # Step 2: Post-process
         transcription = _postprocess(transcription)
         if not transcription:
             logger.info("No valid blocks after post-processing, skipping captions")
             return video_path
 
-        # Step 4: Generate ASS and burn
+        # Step 3: Generate ASS and burn
         _generate_ass(transcription, ass_path)
         await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
 
