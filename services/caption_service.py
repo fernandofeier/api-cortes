@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import time
 
 from google import genai
@@ -13,18 +12,19 @@ from services.video_engine import burn_captions
 logger = logging.getLogger(__name__)
 
 TRANSCRIPTION_PROMPT = """\
-Transcribe the spoken words in this audio with precise timestamps.
+Watch this video and transcribe the spoken dialogue with precise timestamps.
+Use the visual cues (lip movement, scene changes) to sync timestamps accurately.
 Return ONLY a JSON array, no markdown, no code fences.
 [{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
 Rules:
 - Each block: 2 to 5 words maximum
 - Timestamps in seconds with 2 decimal places (e.g. 1.25, 3.80)
-- "start" = when the first word begins being spoken
-- "end" = when the last word finishes being spoken
-- Do not add extra time before or after the actual speech
-- Only transcribe human speech, ignore music and sound effects
-- No blocks during silence — only when someone is speaking
+- "start" = exact moment the person begins speaking (watch their lips)
+- "end" = exact moment the person stops speaking that phrase
+- Only transcribe when someone is visually speaking on screen
+- During scene transitions or silence, do NOT generate any blocks
+- Ignore background music, sound effects, and non-speech audio
 - Pay attention to proper nouns and character names
 - Transcribe in the original language of the audio
 - If no speech, return []
@@ -33,26 +33,9 @@ Rules:
 GEMINI_POLL_TIMEOUT = 300
 
 
-def _extract_audio(video_path: str, output_path: str) -> str:
-    """Extract audio track from video using FFmpeg."""
-    cmd = [
-        settings.ffmpeg_path, "-y",
-        "-i", video_path,
-        "-vn",
-        "-acodec", "aac",
-        "-b:a", "128k",
-        output_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError(f"Audio extraction failed: {result.stderr[-500:]}")
-    logger.info(f"Audio extracted: {output_path}")
-    return output_path
-
-
 def _upload_and_wait(client: genai.Client, file_path: str):
     """Upload file to Gemini File API and wait until processing is complete."""
-    logger.info(f"Uploading audio to Gemini for transcription: {file_path}")
+    logger.info(f"Uploading to Gemini for transcription: {file_path}")
     uploaded_file = client.files.upload(file=file_path)
 
     start_time = time.time()
@@ -192,23 +175,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 async def add_captions(video_path: str, work_dir: str) -> str:
     """
     Full caption pipeline:
-    1. Extract audio from video
-    2. Transcribe via Gemini Flash Lite
-    3. Generate ASS subtitle file
-    4. Burn captions into video
+    1. Upload video to Gemini (video gives visual context for better sync)
+    2. Transcribe via Gemini Flash
+    3. Post-process timestamps
+    4. Generate ASS subtitle file
+    5. Burn captions into video
 
     Returns path to captioned video (or original if no speech detected).
     """
-    audio_path = os.path.join(work_dir, "caption-audio.aac")
     ass_path = os.path.join(work_dir, "captions.ass")
     captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
 
-    # Step 1: Extract audio
-    await asyncio.to_thread(_extract_audio, video_path, audio_path)
-
-    # Step 2: Transcribe with Gemini
+    # Step 1: Upload video to Gemini (video = visual + audio context for precise sync)
     client = genai.Client(api_key=settings.gemini_api_key)
-    uploaded_file = await asyncio.to_thread(_upload_and_wait, client, audio_path)
+    uploaded_file = await asyncio.to_thread(_upload_and_wait, client, video_path)
 
     try:
         transcription = await asyncio.to_thread(_transcribe, client, uploaded_file)
