@@ -109,7 +109,7 @@ async def process_video_pipeline(
             # Captions (optional)
             if options and options.captions:
                 _update_job(job_id, JobStep.PROCESSING, f"Gerando legendas para {corte_label}...")
-                output_path = await add_captions(output_path, work_dir)
+                output_path = await add_captions(output_path, work_dir, caption_style=options.caption_style)
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {corte_label} complete: {output_size_mb:.1f} MB")
@@ -130,6 +130,7 @@ async def process_video_pipeline(
             generated_clips.append({
                 "corte_number": corte.corte_number,
                 "title": corte.title,
+                "platform": corte.platform,
                 "file_id": drive_result["id"],
                 "file_name": drive_result["name"],
                 "web_view_link": drive_result.get("webViewLink"),
@@ -274,7 +275,7 @@ async def manual_cut_pipeline(
             # Captions (optional)
             if options and options.captions:
                 _update_job(job_id, JobStep.PROCESSING, f"Gerando legendas para {clip_label}...")
-                output_path = await add_captions(output_path, work_dir)
+                output_path = await add_captions(output_path, work_dir, caption_style=options.caption_style)
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {clip_label} complete: {output_size_mb:.1f} MB")
@@ -431,7 +432,7 @@ async def manual_edit_pipeline(
         # Captions (optional)
         if options and options.captions:
             _update_job(job_id, JobStep.PROCESSING, "Gerando legendas...")
-            output_path = await add_captions(output_path, work_dir)
+            output_path = await add_captions(output_path, work_dir, caption_style=options.caption_style)
 
         output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
         logger.info(f"[{job_id}] Edit complete: {output_size_mb:.1f} MB")

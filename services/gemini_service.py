@@ -80,6 +80,7 @@ class AnalysisResult:
 class Corte:
     corte_number: int
     title: str
+    platform: str = "universal"
     segments: list[VideoSegment] = field(default_factory=list)
 
 
@@ -90,7 +91,7 @@ engaging, viral-worthy segments for a SINGLE short-form video (TikTok, Reels, Sh
 CRITICAL RULES:
 - Return exactly 1 corte (clip compilation).
 - The corte must contain 2 to 4 segments that make sense together as a coherent short video.
-- The SUM of all segment durations MUST NOT exceed 80 seconds. Hard limit.
+- The SUM of all segment durations MUST NOT exceed 70 seconds. Hard limit.
 - Each individual segment: 10 to 40 seconds.
 - The FIRST segment MUST start with a hook — something visually or emotionally striking \
 that grabs attention in the first 3 seconds. This is critical for retention.
@@ -98,6 +99,7 @@ that grabs attention in the first 3 seconds. This is critical for retention.
 - Segments should be from DIFFERENT parts of the video to create variety.
 - Do NOT include intro/outro, filler, or low-energy content.
 - Timestamps must be precise to 0.1 seconds.
+- The "platform" field must be "universal" (this clip works on all platforms).
 
 Return ONLY valid JSON, no markdown, no code fences. Format:
 
@@ -105,6 +107,7 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
   {
     "corte_number": 1,
     "title": "Short catchy title for this clip",
+    "platform": "universal",
     "segments": [
       {"start": 12.5, "end": 38.0, "description": "Hook: dramatic reveal"},
       {"start": 78.0, "end": 105.5, "description": "Emotional payoff moment"}
@@ -115,14 +118,20 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
 
 MULTI_CLIP_PROMPT = """\
 You are a viral video editor AI. Analyze this video and identify segments for \
-{max_clips} SEPARATE short-form videos (TikTok, Reels, Shorts). Each one must be \
-an independent viral clip.
+{max_clips} SEPARATE short-form videos optimized for different social media platforms.
+
+PLATFORM RULES:
+- Corte 1 MUST be for YouTube Shorts: "platform": "youtube_shorts"
+  - Maximum 70 seconds total (sum of all segments). YouTube Shorts has a strict 60s limit \
+so we keep it under 70s to allow for transitions.
+  - Each individual segment: 10 to 40 seconds.
+- Cortes 2 and beyond MUST be for TikTok/Instagram: "platform": "tiktok_instagram"
+  - Maximum 160 seconds total (2min 40s — optimal for TikTok and Instagram Reels).
+  - Each individual segment: 10 to 60 seconds. Can be longer since the platform allows it.
 
 CRITICAL RULES:
 - Return up to {max_clips} cortes (clip compilations). Each corte becomes a separate video.
 - Each corte must contain 2 to 4 segments that make sense together as a coherent short video.
-- The SUM of segment durations within EACH corte MUST NOT exceed 80 seconds. Hard limit.
-- Each individual segment: 10 to 40 seconds.
 - The FIRST segment of EACH corte MUST start with a hook — something visually or \
 emotionally striking that grabs attention in the first 3 seconds. Critical for retention.
 - Segments MUST NOT repeat or overlap between cortes. Each corte uses unique moments.
@@ -130,6 +139,7 @@ emotionally striking that grabs attention in the first 3 seconds. Critical for r
 - Do NOT include intro/outro, filler, or low-energy content.
 - Timestamps must be precise to 0.1 seconds.
 - Each corte should have a different theme/angle to maximize variety.
+- Every corte MUST have the "platform" field.
 
 Return ONLY valid JSON, no markdown, no code fences. Format:
 
@@ -137,6 +147,7 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
   {{
     "corte_number": 1,
     "title": "Short catchy title for this clip",
+    "platform": "youtube_shorts",
     "segments": [
       {{"start": 12.5, "end": 38.0, "description": "Hook: dramatic moment"}},
       {{"start": 78.0, "end": 105.5, "description": "Emotional payoff"}}
@@ -145,6 +156,7 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
   {{
     "corte_number": 2,
     "title": "Another angle on the content",
+    "platform": "tiktok_instagram",
     "segments": [
       {{"start": 200.0, "end": 225.0, "description": "Hook: surprising reveal"}},
       {{"start": 310.0, "end": 340.0, "description": "Key insight moment"}}
@@ -258,6 +270,7 @@ def _parse_cortes(raw_text: str) -> list[Corte]:
         cortes.append(Corte(
             corte_number=item.get("corte_number", len(cortes) + 1),
             title=item.get("title", f"Corte {len(cortes) + 1}"),
+            platform=item.get("platform", "universal"),
             segments=segments,
         ))
 

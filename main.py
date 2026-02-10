@@ -79,6 +79,10 @@ class ProcessingOptions(BaseModel):
         False,
         description="Generate burned-in captions (uses DeepInfra Whisper if configured, otherwise Gemini)",
     )
+    caption_style: Literal["classic", "bold", "box"] = Field(
+        "classic",
+        description="Caption visual style: classic (white outline), bold (uppercase impact), box (dark background)",
+    )
 
 
 class ProcessRequest(BaseModel):
@@ -470,7 +474,7 @@ async def auth_drive_page(key: str = Query(None)):
             "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             "<h1>Google Drive Already Authorized</h1>"
             "<p>The token.json is valid. You can use the API.</p>"
-            "<p><a href='/health'>Health Check</a></p>"
+            "<p><a href='/'>Health Check</a></p>"
             "</body></html>"
         )
 

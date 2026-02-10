@@ -21,8 +21,8 @@ Edite o `.env`:
 | `GEMINI_API_KEY` | Sim | Chave da API Google Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) |
 | `API_KEY` | Sim | Chave para autenticar chamadas a API |
 | `APP_BASE_URL` | Sim | URL publica da API (ex: `https://api.seudominio.com`) |
-| `GEMINI_MODEL` | Nao | Modelo para analise de video (default: `gemini-2.5-flash`) |
-| `CAPTION_MODEL` | Nao | Modelo para transcricao de legendas (default: `gemini-2.5-flash-lite`) |
+| `GEMINI_MODEL` | Nao | Modelo Gemini para analise e transcricao (default: `gemini-3-flash-preview`) |
+| `DEEPINFRA_API_KEY` | Nao | Chave DeepInfra para legendas via Whisper (mais preciso). Se vazio, usa Gemini |
 | `MAX_UPLOAD_SIZE_MB` | Nao | Limite de tamanho de video em MB (default: `2000`) |
 
 ### 2. Configure o Google Drive (OAuth2)
@@ -79,7 +79,8 @@ Corte automatico com IA. Envia um video e recebe os melhores momentos cortados.
     "width": 1080,
     "height": 1920,
     "mirror": false,
-    "captions": true
+    "captions": true,
+    "caption_style": "bold"
   }
 }
 ```
@@ -200,6 +201,7 @@ Disponiveis em todos os endpoints via campo `options`:
 | `height` | int | 1920 | Altura do video de saida |
 | `mirror` | bool | false | Espelhar video horizontalmente |
 | `captions` | bool | false | Gerar legendas automaticas (burned-in) |
+| `caption_style` | string | `classic` | Estilo visual das legendas: `classic`, `bold`, `box` |
 
 ### Layouts
 
@@ -212,7 +214,30 @@ Disponiveis em todos os endpoints via campo `options`:
 
 ### Legendas (`captions: true`)
 
-Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao queimadas no video com estilo viral (texto grande, branco, bold, outline preto). Se o video nao tiver fala, retorna sem legendas normalmente.
+Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao queimadas no video. Se o video nao tiver fala, retorna sem legendas normalmente.
+
+**Provedores de transcricao:**
+- **DeepInfra Whisper** (recomendado): Timestamps word-level com agrupamento inteligente por pausas na fala. Requer `DEEPINFRA_API_KEY`.
+- **Gemini**: Fallback automatico quando DeepInfra nao esta configurado.
+
+**Estilos de legenda** (`caption_style`):
+
+| Estilo | Visual | Melhor para |
+|--------|--------|-------------|
+| `classic` | Arial 48, branco, outline preto | Uso geral, limpo |
+| `bold` | Arial Black 52, UPPERCASE, outline grossa | Impacto viral, TikTok |
+| `box` | Arial 48, fundo preto semi-transparente | Legibilidade maxima |
+
+### Presets de Plataforma
+
+Ao usar `max_clips`, a IA automaticamente otimiza cada corte para a plataforma ideal:
+
+| max_clips | Comportamento |
+|-----------|---------------|
+| 1 | 1 clip universal, ate 70s |
+| 2+ | 1 clip YouTube Shorts (ate 70s) + restantes TikTok/Instagram (ate 2min 40s) |
+
+O campo `platform` e retornado no webhook para cada clip: `"youtube_shorts"`, `"tiktok_instagram"`, ou `"universal"`.
 
 ---
 
@@ -230,6 +255,7 @@ Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao q
       {
         "corte_number": 1,
         "title": "Momento dramatico",
+        "platform": "youtube_shorts",
         "file_id": "1XYZ789...",
         "file_name": "viral-550e8400-corte1.mp4",
         "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",

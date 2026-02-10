@@ -97,8 +97,23 @@ def _format_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _generate_ass(blocks: list[dict], output_path: str, width: int = 1080, height: int = 1920) -> str:
-    """Generate ASS subtitle file with viral-style formatting."""
+CAPTION_STYLES = {
+    "classic": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,680,1",
+    "bold": "Style: Default,Arial Black,52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,2,0,1,5,2,2,40,40,680,1",
+    "box": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,0,0,3,4,0,2,40,40,680,1",
+}
+
+
+def _generate_ass(
+    blocks: list[dict],
+    output_path: str,
+    width: int = 1080,
+    height: int = 1920,
+    style: str = "classic",
+) -> str:
+    """Generate ASS subtitle file with configurable style."""
+    style_line = CAPTION_STYLES.get(style, CAPTION_STYLES["classic"])
+
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -108,16 +123,19 @@ Collisions: Normal
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,320,1
+{style_line}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+    is_bold = style == "bold"
     lines = [header]
     for block in blocks:
         start = _format_ass_time(block["start"])
         end = _format_ass_time(block["end"])
         text = block["text"].replace("\n", "\\N")
+        if is_bold:
+            text = text.upper()
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     content = "\n".join(lines) + "\n"
@@ -228,7 +246,7 @@ def _group_words_into_blocks(
     return blocks
 
 
-async def _add_captions_whisper(video_path: str, work_dir: str) -> str:
+async def _add_captions_whisper(video_path: str, work_dir: str, caption_style: str = "classic") -> str:
     """Caption pipeline using DeepInfra Whisper."""
     audio_path = os.path.join(work_dir, "caption-audio.aac")
     ass_path = os.path.join(work_dir, "captions.ass")
@@ -250,8 +268,8 @@ async def _add_captions_whisper(video_path: str, work_dir: str) -> str:
         logger.info("No valid blocks after post-processing, skipping captions")
         return video_path
 
-    # Step 5: Generate ASS and burn
-    _generate_ass(transcription, ass_path)
+    # Step 4: Generate ASS and burn
+    _generate_ass(transcription, ass_path, style=caption_style)
     await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
 
     return captioned_path
@@ -350,7 +368,7 @@ def _transcribe_gemini(client: genai.Client, uploaded_file) -> list[dict]:
     return []
 
 
-async def _add_captions_gemini(video_path: str, work_dir: str) -> str:
+async def _add_captions_gemini(video_path: str, work_dir: str, caption_style: str = "classic") -> str:
     """Caption pipeline using Gemini (sends video for visual+audio context)."""
     ass_path = os.path.join(work_dir, "captions.ass")
     captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
@@ -378,7 +396,7 @@ async def _add_captions_gemini(video_path: str, work_dir: str) -> str:
         return video_path
 
     # Step 3: Generate ASS and burn
-    _generate_ass(transcription, ass_path)
+    _generate_ass(transcription, ass_path, style=caption_style)
     await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
 
     return captioned_path
@@ -388,7 +406,7 @@ async def _add_captions_gemini(video_path: str, work_dir: str) -> str:
 # Public API (same interface, provider selected automatically)
 # ---------------------------------------------------------------------------
 
-async def add_captions(video_path: str, work_dir: str) -> str:
+async def add_captions(video_path: str, work_dir: str, caption_style: str = "classic") -> str:
     """
     Caption pipeline — non-fatal wrapper.
     Uses DeepInfra Whisper if configured, otherwise falls back to Gemini.
@@ -396,9 +414,9 @@ async def add_captions(video_path: str, work_dir: str) -> str:
     """
     try:
         if settings.deepinfra_api_key:
-            return await _add_captions_whisper(video_path, work_dir)
+            return await _add_captions_whisper(video_path, work_dir, caption_style)
         else:
-            return await _add_captions_gemini(video_path, work_dir)
+            return await _add_captions_gemini(video_path, work_dir, caption_style)
     except Exception as e:
         logger.error(f"Caption generation failed, delivering video without captions: {e}")
         return video_path
