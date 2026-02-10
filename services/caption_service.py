@@ -15,10 +15,25 @@ logger = logging.getLogger(__name__)
 
 GEMINI_POLL_TIMEOUT = 300
 
+TRANSCRIPTION_PROMPT = """\
+Transcribe the spoken dialogue in this audio with precise timestamps.
+Return ONLY a JSON array, no markdown, no code fences.
+[{"start": 0.00, "end": 2.50, "text": "phrase here"}, ...]
 
-# ---------------------------------------------------------------------------
-# Step 1: FFmpeg — extract audio & detect speech regions (signal-level)
-# ---------------------------------------------------------------------------
+Rules:
+- Each block: 2 to 5 words
+- Timestamps in seconds with 2 decimal places
+- "start" = when the first word begins being spoken
+- "end" = when the last word finishes being spoken
+- IMPORTANT: Transcribe in the language that is ACTUALLY SPOKEN in the audio
+- If the audio is a dub (e.g. Portuguese dub of an English show), transcribe the PORTUGUESE words you hear
+- Do NOT translate — write exactly what you hear
+- Ignore music, sound effects, and background noise
+- No blocks during silence
+- Pay attention to proper nouns and character names
+- If no speech, return []
+"""
+
 
 def _extract_audio(video_path: str, output_path: str) -> str:
     """Extract audio track from video using FFmpeg."""
@@ -33,87 +48,6 @@ def _extract_audio(video_path: str, output_path: str) -> str:
         raise RuntimeError(f"Audio extraction failed: {result.stderr[-500:]}")
     logger.info(f"Audio extracted: {output_path}")
     return output_path
-
-
-def _detect_speech_regions(audio_path: str) -> list[dict]:
-    """
-    Use FFmpeg silencedetect to find exactly when speech occurs.
-    Returns list of {"start": float, "end": float} for non-silent periods.
-
-    This gives signal-level precision — much better than LLM timestamp guessing.
-    """
-    cmd = [
-        settings.ffmpeg_path,
-        "-i", audio_path,
-        "-af", "silencedetect=noise=-30dB:d=0.4",
-        "-f", "null", "-",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    stderr = result.stderr
-
-    # Parse silence boundaries from FFmpeg output
-    silence_starts = [float(m) for m in re.findall(r"silence_start:\s*([\d.]+)", stderr)]
-    silence_ends = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", stderr)]
-
-    # Get total audio duration
-    total = 0.0
-    dur_match = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", stderr)
-    if dur_match:
-        h, m, s = dur_match.groups()
-        total = int(h) * 3600 + int(m) * 60 + float(s)
-
-    # Pair silence_start/silence_end
-    silences = list(zip(silence_starts, silence_ends[:len(silence_starts)]))
-    # Handle trailing silence (start without matching end = silence until end of file)
-    if len(silence_starts) > len(silence_ends) and total > 0:
-        silences.append((silence_starts[-1], total))
-
-    # Invert silence regions to get speech regions
-    speech = []
-    pos = 0.0
-    for s_start, s_end in sorted(silences):
-        if s_start > pos + 0.1:
-            speech.append({"start": round(pos, 2), "end": round(s_start, 2)})
-        pos = s_end
-    # Trailing speech after last silence
-    if total > 0 and pos < total - 0.1:
-        speech.append({"start": round(pos, 2), "end": round(total, 2)})
-
-    # If no silence detected at all, entire audio is speech
-    if not silences and total > 0:
-        speech = [{"start": 0.0, "end": round(total, 2)}]
-
-    logger.info(f"Speech detection: {len(speech)} regions, {len(silences)} silence gaps")
-    return speech
-
-
-# ---------------------------------------------------------------------------
-# Step 2: Gemini — transcribe TEXT only (no timestamp guessing)
-# ---------------------------------------------------------------------------
-
-def _build_prompt(speech_regions: list[dict]) -> str:
-    """Build prompt that tells Gemini exactly when speech occurs."""
-    regions_str = "\n".join(
-        f"  Region {i+1}: {r['start']:.2f}s to {r['end']:.2f}s"
-        for i, r in enumerate(speech_regions)
-    )
-    return f"""\
-Transcribe the speech in this audio file.
-Speech was detected at these exact moments:
-
-{regions_str}
-
-For each region, transcribe what is said.
-Return ONLY a JSON array, no markdown, no code fences:
-[{{"region": 1, "text": "full transcription here"}}, ...]
-
-Rules:
-- Transcribe in the EXACT language spoken in the audio (listen carefully)
-- If the content is dubbed, transcribe the DUB language, not the original
-- Pay close attention to proper nouns and character names
-- If a region has no intelligible speech (just noise/music), use empty string ""
-- Return ONLY the JSON array, nothing else
-"""
 
 
 def _upload_and_wait(client: genai.Client, file_path: str):
@@ -148,15 +82,13 @@ def _clean_json_response(raw: str) -> str:
     """Clean Gemini response to extract valid JSON."""
     text = raw.strip()
 
-    # Remove markdown code fences (```json ... ``` or ``` ... ```)
+    # Remove markdown code fences
     text = re.sub(r"^```\w*\s*\n?", "", text)
     text = re.sub(r"\n?```\s*$", "", text)
     text = text.strip()
 
-    # If response was truncated mid-string, try to close it
-    # Find the last complete JSON object
+    # If truncated mid-string, try to close at last complete object
     if text and not text.endswith("]"):
-        # Try to find the last complete entry and close the array
         last_brace = text.rfind("}")
         if last_brace > 0:
             text = text[:last_brace + 1] + "]"
@@ -165,104 +97,74 @@ def _clean_json_response(raw: str) -> str:
     return text
 
 
-def _transcribe_regions(client: genai.Client, uploaded_file, speech_regions: list[dict]) -> list[dict]:
-    """
-    Send audio + speech region info to Gemini.
-    Returns list of {"region": int, "text": str}.
-    Gemini only needs to tell us WHAT is said — FFmpeg already told us WHEN.
-    """
-    prompt = _build_prompt(speech_regions)
-
+def _transcribe(client: genai.Client, uploaded_file) -> list[dict]:
+    """Call Gemini to transcribe audio. Returns list of {start, end, text}."""
     for attempt in range(2):
         response = client.models.generate_content(
             model=settings.caption_model,
-            contents=[uploaded_file, prompt],
+            contents=[uploaded_file, TRANSCRIPTION_PROMPT],
         )
 
         raw = response.text.strip()
-        logger.info(f"Transcription response attempt {attempt+1} (first 500 chars): {raw[:500]}")
+        logger.info(f"Transcription attempt {attempt+1} (first 500 chars): {raw[:500]}")
 
         text = _clean_json_response(raw)
 
         try:
-            result = json.loads(text)
+            blocks = json.loads(text)
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parse failed (attempt {attempt+1}): {e}")
             logger.warning(f"Raw response: {raw[:1000]}")
             if attempt == 0:
-                continue  # retry once
+                continue
             return []
 
-        if not isinstance(result, list):
+        if not isinstance(blocks, list):
             logger.warning("Transcription returned non-list")
             return []
 
-        return result
+        valid = []
+        for b in blocks:
+            if isinstance(b, dict) and "start" in b and "end" in b and "text" in b:
+                start = float(b["start"])
+                end = float(b["end"])
+                if end > start and b["text"].strip():
+                    valid.append({"start": start, "end": end, "text": b["text"].strip()})
+
+        logger.info(f"Transcription: {len(valid)} valid blocks")
+        return valid
 
     return []
 
 
-# ---------------------------------------------------------------------------
-# Step 3: Combine FFmpeg timing + Gemini text → subtitle blocks
-# ---------------------------------------------------------------------------
-
-def _regions_to_blocks(speech_regions: list[dict], transcriptions: list[dict], max_words: int = 4) -> list[dict]:
+def _postprocess(blocks: list[dict]) -> list[dict]:
     """
-    Map Gemini text to FFmpeg-detected speech regions.
-    Distributes words proportionally within each region's exact boundaries.
-
-    This guarantees:
-    - Captions NEVER appear before speech starts
-    - Captions NEVER appear during silence
-    - Smooth transitions within speech regions
+    Clean up transcription blocks:
+    - Sort by start time
+    - Remove very short blocks
+    - Remove overlaps so only one subtitle shows at a time
     """
-    blocks = []
+    if not blocks:
+        return blocks
 
-    for entry in transcriptions:
-        region_idx = entry.get("region", 0) - 1  # 1-indexed → 0-indexed
-        text = entry.get("text", "").strip()
+    blocks.sort(key=lambda b: b["start"])
 
-        if not text or region_idx < 0 or region_idx >= len(speech_regions):
-            continue
+    initial = len(blocks)
 
-        region = speech_regions[region_idx]
-        start = region["start"]
-        end = region["end"]
-        duration = end - start
+    # Remove blocks shorter than 0.15s
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.15]
 
-        words = text.split()
-        if not words:
-            continue
+    # Remove overlaps: trim end of each block to not exceed next block's start
+    for i in range(len(blocks) - 1):
+        if blocks[i]["end"] > blocks[i + 1]["start"]:
+            blocks[i]["end"] = blocks[i + 1]["start"]
 
-        total_words = len(words)
-        word_idx = 0
+    # Remove blocks that became too short after trimming
+    blocks = [b for b in blocks if (b["end"] - b["start"]) >= 0.08]
 
-        while word_idx < total_words:
-            chunk = words[word_idx:word_idx + max_words]
-            chunk_end_idx = min(word_idx + max_words, total_words)
-
-            # Proportional timestamp distribution
-            chunk_start = start + (word_idx / total_words) * duration
-            chunk_end = start + (chunk_end_idx / total_words) * duration
-
-            # Ensure minimum display time of 0.3s
-            if chunk_end - chunk_start < 0.3:
-                chunk_end = min(chunk_start + 0.3, end)
-
-            blocks.append({
-                "start": round(chunk_start, 2),
-                "end": round(chunk_end, 2),
-                "text": " ".join(chunk),
-            })
-            word_idx += max_words
-
-    logger.info(f"Generated {len(blocks)} subtitle blocks from {len(transcriptions)} regions")
+    logger.info(f"Post-processing: {initial} -> {len(blocks)} blocks")
     return blocks
 
-
-# ---------------------------------------------------------------------------
-# Step 4: ASS generation
-# ---------------------------------------------------------------------------
 
 def _format_ass_time(seconds: float) -> str:
     """Convert seconds to ASS time format: H:MM:SS.CC"""
@@ -305,62 +207,52 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_path
 
 
-# ---------------------------------------------------------------------------
-# Main pipeline
-# ---------------------------------------------------------------------------
-
 async def add_captions(video_path: str, work_dir: str) -> str:
     """
-    Hybrid caption pipeline:
-    1. FFmpeg extracts audio & detects speech regions (precise signal-level timing)
-    2. Gemini transcribes text per region (no timestamp guessing)
-    3. Words distributed proportionally within FFmpeg-detected boundaries
-    4. ASS subtitle file generated and burned into video
+    Caption pipeline:
+    1. Extract audio from clip
+    2. Send audio to Gemini for transcription with timestamps
+    3. Post-process (remove overlaps, short blocks)
+    4. Generate ASS and burn into video
 
-    Returns path to captioned video (or original if no speech detected).
+    Non-fatal: if anything fails, returns original video without captions.
     """
-    audio_path = os.path.join(work_dir, "caption-audio.aac")
-    ass_path = os.path.join(work_dir, "captions.ass")
-    captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
-
-    # Step 1: Extract audio
-    await asyncio.to_thread(_extract_audio, video_path, audio_path)
-
-    # Step 2: Detect speech regions with FFmpeg (signal-level precision)
-    speech_regions = await asyncio.to_thread(_detect_speech_regions, audio_path)
-    if not speech_regions:
-        logger.info("No speech regions detected, skipping captions")
-        return video_path
-
-    # Step 3: Upload audio to Gemini and transcribe text per region
-    client = genai.Client(api_key=settings.gemini_api_key)
-    uploaded_file = await asyncio.to_thread(_upload_and_wait, client, audio_path)
-
     try:
-        transcriptions = await asyncio.to_thread(
-            _transcribe_regions, client, uploaded_file, speech_regions
-        )
-    finally:
+        audio_path = os.path.join(work_dir, "caption-audio.aac")
+        ass_path = os.path.join(work_dir, "captions.ass")
+        captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
+
+        # Step 1: Extract audio
+        await asyncio.to_thread(_extract_audio, video_path, audio_path)
+
+        # Step 2: Transcribe with Gemini
+        client = genai.Client(api_key=settings.gemini_api_key)
+        uploaded_file = await asyncio.to_thread(_upload_and_wait, client, audio_path)
+
         try:
-            await asyncio.to_thread(client.files.delete, name=uploaded_file.name)
-            logger.info(f"Cleaned up Gemini file: {uploaded_file.name}")
-        except Exception as e:
-            logger.warning(f"Failed to delete Gemini file: {e}")
+            transcription = await asyncio.to_thread(_transcribe, client, uploaded_file)
+        finally:
+            try:
+                await asyncio.to_thread(client.files.delete, name=uploaded_file.name)
+            except Exception:
+                pass
 
-    if not transcriptions:
-        logger.info("No transcription returned, skipping captions")
+        if not transcription:
+            logger.info("No speech detected, skipping captions")
+            return video_path
+
+        # Step 3: Post-process
+        transcription = _postprocess(transcription)
+        if not transcription:
+            logger.info("No valid blocks after post-processing, skipping captions")
+            return video_path
+
+        # Step 4: Generate ASS and burn
+        _generate_ass(transcription, ass_path)
+        await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
+
+        return captioned_path
+
+    except Exception as e:
+        logger.error(f"Caption generation failed, delivering video without captions: {e}")
         return video_path
-
-    # Step 4: Combine FFmpeg timing + Gemini text → subtitle blocks
-    blocks = _regions_to_blocks(speech_regions, transcriptions)
-    if not blocks:
-        logger.info("No subtitle blocks generated, skipping captions")
-        return video_path
-
-    # Step 5: Generate ASS file
-    _generate_ass(blocks, ass_path)
-
-    # Step 6: Burn captions into video
-    await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
-
-    return captioned_path
