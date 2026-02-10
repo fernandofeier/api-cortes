@@ -77,7 +77,7 @@ class ProcessingOptions(BaseModel):
     )
     captions: bool = Field(
         False,
-        description="Generate burned-in captions/subtitles via Gemini transcription",
+        description="Generate burned-in captions (uses DeepInfra Whisper if configured, otherwise Gemini)",
     )
 
 

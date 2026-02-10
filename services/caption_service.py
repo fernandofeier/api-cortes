@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 
+import httpx
 from google import genai
 
 from core.config import settings
@@ -39,6 +40,10 @@ Rules:
 """
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
 def _extract_audio(video_path: str, output_path: str) -> str:
     """Extract audio track from video using FFmpeg."""
     cmd = [
@@ -52,93 +57,6 @@ def _extract_audio(video_path: str, output_path: str) -> str:
         raise RuntimeError(f"Audio extraction failed: {result.stderr[-500:]}")
     logger.info(f"Audio extracted: {output_path}")
     return output_path
-
-
-def _upload_and_wait(client: genai.Client, file_path: str):
-    """Upload file to Gemini File API and wait until processing is complete."""
-    logger.info(f"Uploading to Gemini for transcription: {file_path}")
-    uploaded_file = client.files.upload(file=file_path)
-
-    start_time = time.time()
-    while uploaded_file.state.name == "PROCESSING":
-        if time.time() - start_time > GEMINI_POLL_TIMEOUT:
-            try:
-                client.files.delete(name=uploaded_file.name)
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Gemini file processing timed out after {GEMINI_POLL_TIMEOUT}s"
-            )
-        time.sleep(3)
-        uploaded_file = client.files.get(name=uploaded_file.name)
-
-    if uploaded_file.state.name == "FAILED":
-        try:
-            client.files.delete(name=uploaded_file.name)
-        except Exception:
-            pass
-        raise RuntimeError("Gemini file processing failed")
-
-    return uploaded_file
-
-
-def _clean_json_response(raw: str) -> str:
-    """Clean Gemini response to extract valid JSON."""
-    text = raw.strip()
-
-    # Remove markdown code fences
-    text = re.sub(r"^```\w*\s*\n?", "", text)
-    text = re.sub(r"\n?```\s*$", "", text)
-    text = text.strip()
-
-    # If truncated mid-string, try to close at last complete object
-    if text and not text.endswith("]"):
-        last_brace = text.rfind("}")
-        if last_brace > 0:
-            text = text[:last_brace + 1] + "]"
-            logger.warning("JSON response appeared truncated, attempted repair")
-
-    return text
-
-
-def _transcribe(client: genai.Client, uploaded_file) -> list[dict]:
-    """Call Gemini to transcribe audio. Returns list of {start, end, text}."""
-    for attempt in range(2):
-        response = client.models.generate_content(
-            model=settings.caption_model,
-            contents=[uploaded_file, TRANSCRIPTION_PROMPT],
-        )
-
-        raw = response.text.strip()
-        logger.info(f"Transcription attempt {attempt+1} (first 500 chars): {raw[:500]}")
-
-        text = _clean_json_response(raw)
-
-        try:
-            blocks = json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON parse failed (attempt {attempt+1}): {e}")
-            logger.warning(f"Raw response: {raw[:1000]}")
-            if attempt == 0:
-                continue
-            return []
-
-        if not isinstance(blocks, list):
-            logger.warning("Transcription returned non-list")
-            return []
-
-        valid = []
-        for b in blocks:
-            if isinstance(b, dict) and "start" in b and "end" in b and "text" in b:
-                start = float(b["start"])
-                end = float(b["end"])
-                if end > start and b["text"].strip():
-                    valid.append({"start": start, "end": end, "text": b["text"].strip()})
-
-        logger.info(f"Transcription: {len(valid)} valid blocks")
-        return valid
-
-    return []
 
 
 def _postprocess(blocks: list[dict]) -> list[dict]:
@@ -211,47 +129,244 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_path
 
 
-async def add_captions(video_path: str, work_dir: str) -> str:
-    """
-    Caption pipeline:
-    1. Send video to Gemini for transcription with timestamps (visual + audio context)
-    2. Post-process (remove overlaps, short blocks)
-    3. Generate ASS and burn into video
+# ---------------------------------------------------------------------------
+# Provider: DeepInfra Whisper
+# ---------------------------------------------------------------------------
 
-    Non-fatal: if anything fails, returns original video without captions.
-    """
-    try:
-        ass_path = os.path.join(work_dir, "captions.ass")
-        captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
+async def _transcribe_whisper(audio_path: str) -> list[dict]:
+    """Send audio to DeepInfra Whisper API and return transcription blocks."""
+    logger.info(f"Transcribing with Whisper: {audio_path}")
 
-        # Step 1: Upload video to Gemini (video = visual context for precise scene-aware timestamps)
-        client = genai.Client(api_key=settings.gemini_api_key)
-        uploaded_file = await asyncio.to_thread(_upload_and_wait, client, video_path)
+    async with httpx.AsyncClient(timeout=120) as client:
+        with open(audio_path, "rb") as f:
+            response = await client.post(
+                "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo",
+                headers={"Authorization": f"bearer {settings.deepinfra_api_key}"},
+                files={"audio": (os.path.basename(audio_path), f, "audio/aac")},
+            )
 
-        try:
-            transcription = await asyncio.to_thread(_transcribe, client, uploaded_file)
-        finally:
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Whisper API error ({response.status_code}): {response.text[:500]}"
+        )
+
+    data = response.json()
+    logger.info(f"Whisper response keys: {list(data.keys())}")
+
+    segments = data.get("segments", [])
+    blocks = []
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if text:
+            blocks.append({
+                "start": float(seg["start"]),
+                "end": float(seg["end"]),
+                "text": text,
+            })
+
+    logger.info(f"Whisper transcription: {len(blocks)} segments")
+    return blocks
+
+
+def _split_long_segments(blocks: list[dict], max_words: int = 5) -> list[dict]:
+    """Split segments with more than max_words into smaller subtitle blocks."""
+    result = []
+    for block in blocks:
+        words = block["text"].split()
+        if len(words) <= max_words:
+            result.append(block)
+            continue
+
+        duration = block["end"] - block["start"]
+        time_per_word = duration / len(words)
+
+        for chunk_start_idx in range(0, len(words), max_words):
+            chunk_words = words[chunk_start_idx:chunk_start_idx + max_words]
+            chunk_start = block["start"] + chunk_start_idx * time_per_word
+            chunk_end = chunk_start + len(chunk_words) * time_per_word
+            result.append({
+                "start": round(chunk_start, 2),
+                "end": round(chunk_end, 2),
+                "text": " ".join(chunk_words),
+            })
+
+    return result
+
+
+async def _add_captions_whisper(video_path: str, work_dir: str) -> str:
+    """Caption pipeline using DeepInfra Whisper."""
+    audio_path = os.path.join(work_dir, "caption-audio.aac")
+    ass_path = os.path.join(work_dir, "captions.ass")
+    captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
+
+    # Step 1: Extract audio
+    await asyncio.to_thread(_extract_audio, video_path, audio_path)
+
+    # Step 2: Transcribe with Whisper
+    transcription = await _transcribe_whisper(audio_path)
+
+    if not transcription:
+        logger.info("Whisper: no speech detected, skipping captions")
+        return video_path
+
+    # Step 3: Split long segments into subtitle-sized blocks
+    transcription = _split_long_segments(transcription)
+
+    # Step 4: Post-process (remove overlaps, short blocks)
+    transcription = _postprocess(transcription)
+    if not transcription:
+        logger.info("No valid blocks after post-processing, skipping captions")
+        return video_path
+
+    # Step 5: Generate ASS and burn
+    _generate_ass(transcription, ass_path)
+    await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
+
+    return captioned_path
+
+
+# ---------------------------------------------------------------------------
+# Provider: Gemini
+# ---------------------------------------------------------------------------
+
+def _upload_and_wait(client: genai.Client, file_path: str):
+    """Upload file to Gemini File API and wait until processing is complete."""
+    logger.info(f"Uploading to Gemini for transcription: {file_path}")
+    uploaded_file = client.files.upload(file=file_path)
+
+    start_time = time.time()
+    while uploaded_file.state.name == "PROCESSING":
+        if time.time() - start_time > GEMINI_POLL_TIMEOUT:
             try:
-                await asyncio.to_thread(client.files.delete, name=uploaded_file.name)
+                client.files.delete(name=uploaded_file.name)
             except Exception:
                 pass
+            raise RuntimeError(
+                f"Gemini file processing timed out after {GEMINI_POLL_TIMEOUT}s"
+            )
+        time.sleep(3)
+        uploaded_file = client.files.get(name=uploaded_file.name)
 
-        if not transcription:
-            logger.info("No speech detected, skipping captions")
-            return video_path
+    if uploaded_file.state.name == "FAILED":
+        try:
+            client.files.delete(name=uploaded_file.name)
+        except Exception:
+            pass
+        raise RuntimeError("Gemini file processing failed")
 
-        # Step 2: Post-process
-        transcription = _postprocess(transcription)
-        if not transcription:
-            logger.info("No valid blocks after post-processing, skipping captions")
-            return video_path
+    return uploaded_file
 
-        # Step 3: Generate ASS and burn
-        _generate_ass(transcription, ass_path)
-        await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
 
-        return captioned_path
+def _clean_json_response(raw: str) -> str:
+    """Clean Gemini response to extract valid JSON."""
+    text = raw.strip()
 
+    # Remove markdown code fences
+    text = re.sub(r"^```\w*\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # If truncated mid-string, try to close at last complete object
+    if text and not text.endswith("]"):
+        last_brace = text.rfind("}")
+        if last_brace > 0:
+            text = text[:last_brace + 1] + "]"
+            logger.warning("JSON response appeared truncated, attempted repair")
+
+    return text
+
+
+def _transcribe_gemini(client: genai.Client, uploaded_file) -> list[dict]:
+    """Call Gemini to transcribe video. Returns list of {start, end, text}."""
+    logger.info("Transcribing with Gemini")
+
+    for attempt in range(2):
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=[uploaded_file, TRANSCRIPTION_PROMPT],
+        )
+
+        raw = response.text.strip()
+        logger.info(f"Transcription attempt {attempt+1} (first 500 chars): {raw[:500]}")
+
+        text = _clean_json_response(raw)
+
+        try:
+            blocks = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse failed (attempt {attempt+1}): {e}")
+            logger.warning(f"Raw response: {raw[:1000]}")
+            if attempt == 0:
+                continue
+            return []
+
+        if not isinstance(blocks, list):
+            logger.warning("Transcription returned non-list")
+            return []
+
+        valid = []
+        for b in blocks:
+            if isinstance(b, dict) and "start" in b and "end" in b and "text" in b:
+                start = float(b["start"])
+                end = float(b["end"])
+                if end > start and b["text"].strip():
+                    valid.append({"start": start, "end": end, "text": b["text"].strip()})
+
+        logger.info(f"Gemini transcription: {len(valid)} valid blocks")
+        return valid
+
+    return []
+
+
+async def _add_captions_gemini(video_path: str, work_dir: str) -> str:
+    """Caption pipeline using Gemini (sends video for visual+audio context)."""
+    ass_path = os.path.join(work_dir, "captions.ass")
+    captioned_path = os.path.join(work_dir, "captioned-" + os.path.basename(video_path))
+
+    # Step 1: Upload video to Gemini
+    client = genai.Client(api_key=settings.gemini_api_key)
+    uploaded_file = await asyncio.to_thread(_upload_and_wait, client, video_path)
+
+    try:
+        transcription = await asyncio.to_thread(_transcribe_gemini, client, uploaded_file)
+    finally:
+        try:
+            await asyncio.to_thread(client.files.delete, name=uploaded_file.name)
+        except Exception:
+            pass
+
+    if not transcription:
+        logger.info("Gemini: no speech detected, skipping captions")
+        return video_path
+
+    # Step 2: Post-process
+    transcription = _postprocess(transcription)
+    if not transcription:
+        logger.info("No valid blocks after post-processing, skipping captions")
+        return video_path
+
+    # Step 3: Generate ASS and burn
+    _generate_ass(transcription, ass_path)
+    await asyncio.to_thread(burn_captions, video_path, ass_path, captioned_path)
+
+    return captioned_path
+
+
+# ---------------------------------------------------------------------------
+# Public API (same interface, provider selected automatically)
+# ---------------------------------------------------------------------------
+
+async def add_captions(video_path: str, work_dir: str) -> str:
+    """
+    Caption pipeline — non-fatal wrapper.
+    Uses DeepInfra Whisper if configured, otherwise falls back to Gemini.
+    Returns original video path on any failure.
+    """
+    try:
+        if settings.deepinfra_api_key:
+            return await _add_captions_whisper(video_path, work_dir)
+        else:
+            return await _add_captions_gemini(video_path, work_dir)
     except Exception as e:
         logger.error(f"Caption generation failed, delivering video without captions: {e}")
         return video_path

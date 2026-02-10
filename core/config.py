@@ -10,8 +10,7 @@ class Settings(BaseSettings):
 
     # --- Google Gemini ---
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
-    caption_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3-flash-preview"
 
     # --- Google Drive (OAuth2) ---
     google_drive_token_json: str = "/app/credentials/token.json"
@@ -31,6 +30,9 @@ class Settings(BaseSettings):
     # --- Limits ---
     multi_clip_min_video_duration: int = 600  # 10 minutes in seconds
     max_upload_size_mb: int = 2000  # Gemini File API supports up to 2 GB
+
+    # --- DeepInfra (optional — Whisper captions) ---
+    deepinfra_api_key: str = ""
 
     # --- Telegram Bot (optional) ---
     telegram_bot_token: str = ""
