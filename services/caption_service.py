@@ -144,12 +144,24 @@ def _upload_and_wait(client: genai.Client, file_path: str):
     return uploaded_file
 
 
-def _strip_code_fences(text: str) -> str:
-    """Remove markdown code fences if present."""
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [line for line in lines if not line.strip().startswith("```")]
-        return "\n".join(lines)
+def _clean_json_response(raw: str) -> str:
+    """Clean Gemini response to extract valid JSON."""
+    text = raw.strip()
+
+    # Remove markdown code fences (```json ... ``` or ``` ... ```)
+    text = re.sub(r"^```\w*\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # If response was truncated mid-string, try to close it
+    # Find the last complete JSON object
+    if text and not text.endswith("]"):
+        # Try to find the last complete entry and close the array
+        last_brace = text.rfind("}")
+        if last_brace > 0:
+            text = text[:last_brace + 1] + "]"
+            logger.warning("JSON response appeared truncated, attempted repair")
+
     return text
 
 
@@ -160,22 +172,34 @@ def _transcribe_regions(client: genai.Client, uploaded_file, speech_regions: lis
     Gemini only needs to tell us WHAT is said — FFmpeg already told us WHEN.
     """
     prompt = _build_prompt(speech_regions)
-    response = client.models.generate_content(
-        model=settings.caption_model,
-        contents=[uploaded_file, prompt],
-    )
 
-    raw = response.text.strip()
-    logger.info(f"Transcription response (first 500 chars): {raw[:500]}")
+    for attempt in range(2):
+        response = client.models.generate_content(
+            model=settings.caption_model,
+            contents=[uploaded_file, prompt],
+        )
 
-    text = _strip_code_fences(raw)
-    result = json.loads(text)
+        raw = response.text.strip()
+        logger.info(f"Transcription response attempt {attempt+1} (first 500 chars): {raw[:500]}")
 
-    if not isinstance(result, list):
-        logger.warning("Transcription returned non-list")
-        return []
+        text = _clean_json_response(raw)
 
-    return result
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse failed (attempt {attempt+1}): {e}")
+            logger.warning(f"Raw response: {raw[:1000]}")
+            if attempt == 0:
+                continue  # retry once
+            return []
+
+        if not isinstance(result, list):
+            logger.warning("Transcription returned non-list")
+            return []
+
+        return result
+
+    return []
 
 
 # ---------------------------------------------------------------------------
