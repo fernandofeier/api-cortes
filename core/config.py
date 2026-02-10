@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # --- Google Gemini ---
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
-    caption_model: str = "gemini-2.5-flash"
+    caption_model: str = "gemini-2.5-flash-lite"
 
     # --- Google Drive (OAuth2) ---
     google_drive_token_json: str = "/app/credentials/token.json"
