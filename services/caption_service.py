@@ -98,9 +98,9 @@ def _format_ass_time(seconds: float) -> str:
 
 
 CAPTION_STYLES = {
-    "classic": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,660,1",
-    "bold": "Style: Default,Arial Black,52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,2,0,1,5,2,2,40,40,660,1",
-    "box": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,0,0,3,4,0,2,40,40,660,1",
+    "classic": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,40,40,620,1",
+    "bold": "Style: Default,Arial Black,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,2,0,1,5,2,2,40,40,620,1",
+    "box": "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&HC0000000,-1,0,0,0,100,100,0,0,3,4,0,2,40,40,620,1",
 }
 
 
