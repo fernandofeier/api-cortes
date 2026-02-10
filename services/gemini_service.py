@@ -91,22 +91,29 @@ engaging, viral-worthy segments for a SINGLE short-form video (TikTok, Reels, Sh
 CRITICAL RULES:
 - Return exactly 1 corte (clip compilation).
 - The corte must contain 2 to 4 segments that make sense together as a coherent short video.
-- The SUM of all segment durations MUST NOT exceed 70 seconds. Hard limit.
+- The SUM of all segment durations MUST be between 50 and 70 seconds. Aim for 60-70s. \
+Do NOT make clips shorter than 50 seconds — short clips feel incomplete and lose viewers.
 - Each individual segment: 10 to 40 seconds.
 - The FIRST segment MUST start with a hook — something visually or emotionally striking \
 that grabs attention in the first 3 seconds. This is critical for retention.
 - Segments must NOT overlap.
 - Segments should be from DIFFERENT parts of the video to create variety.
+- Each segment must tell a complete thought or moment — never cut mid-sentence or mid-action.
 - Do NOT include intro/outro, filler, or low-energy content.
 - Timestamps must be precise to 0.1 seconds.
 - The "platform" field must be "universal" (this clip works on all platforms).
+
+LANGUAGE RULE:
+- The "title" and each segment's "description" MUST be written in the SAME language \
+spoken in the video. If the video is in Portuguese, write in Portuguese. If in English, \
+write in English. Match the video's language exactly.
 
 Return ONLY valid JSON, no markdown, no code fences. Format:
 
 [
   {
     "corte_number": 1,
-    "title": "Short catchy title for this clip",
+    "title": "Short catchy title in the video's language",
     "platform": "universal",
     "segments": [
       {"start": 12.5, "end": 38.0, "description": "Hook: dramatic reveal"},
@@ -122,18 +129,22 @@ You are a viral video editor AI. Analyze this video and identify segments for \
 
 PLATFORM RULES:
 - Corte 1 MUST be for YouTube Shorts: "platform": "youtube_shorts"
-  - Maximum 70 seconds total (sum of all segments). YouTube Shorts has a strict 60s limit \
-so we keep it under 70s to allow for transitions.
+  - Total duration: 50 to 70 seconds (sum of all segments). Aim for 60-70s. \
+YouTube Shorts has a strict 60s limit so we keep it under 70s to allow for transitions.
   - Each individual segment: 10 to 40 seconds.
 - Cortes 2 and beyond MUST be for TikTok/Instagram: "platform": "tiktok_instagram"
-  - Maximum 160 seconds total (2min 40s — optimal for TikTok and Instagram Reels).
-  - Each individual segment: 10 to 60 seconds. Can be longer since the platform allows it.
+  - Total duration: MINIMUM 70 seconds, MAXIMUM 160 seconds (2min 40s). Aim for 90-140s. \
+These platforms allow longer content, so USE that time to tell a more complete story. \
+Do NOT make these clips short — a 30s or 40s TikTok/Instagram clip feels incomplete. \
+Include more context, build-up, and payoff.
+  - Each individual segment: 15 to 60 seconds. Use longer segments to capture full moments.
 
 CRITICAL RULES:
 - Return up to {max_clips} cortes (clip compilations). Each corte becomes a separate video.
 - Each corte must contain 2 to 4 segments that make sense together as a coherent short video.
 - The FIRST segment of EACH corte MUST start with a hook — something visually or \
 emotionally striking that grabs attention in the first 3 seconds. Critical for retention.
+- Each segment must tell a complete thought or moment — never cut mid-sentence or mid-action.
 - Segments MUST NOT repeat or overlap between cortes. Each corte uses unique moments.
 - Segments within a corte should be from DIFFERENT parts of the video to create variety.
 - Do NOT include intro/outro, filler, or low-energy content.
@@ -141,25 +152,31 @@ emotionally striking that grabs attention in the first 3 seconds. Critical for r
 - Each corte should have a different theme/angle to maximize variety.
 - Every corte MUST have the "platform" field.
 
+LANGUAGE RULE:
+- The "title" and each segment's "description" MUST be written in the SAME language \
+spoken in the video. If the video is in Portuguese, write in Portuguese. If in English, \
+write in English. Match the video's language exactly.
+
 Return ONLY valid JSON, no markdown, no code fences. Format:
 
 [
   {{
     "corte_number": 1,
-    "title": "Short catchy title for this clip",
+    "title": "Titulo curto e chamativo no idioma do video",
     "platform": "youtube_shorts",
     "segments": [
-      {{"start": 12.5, "end": 38.0, "description": "Hook: dramatic moment"}},
-      {{"start": 78.0, "end": 105.5, "description": "Emotional payoff"}}
+      {{"start": 12.5, "end": 38.0, "description": "Hook: momento dramatico"}},
+      {{"start": 78.0, "end": 105.5, "description": "Desfecho emocional"}}
     ]
   }},
   {{
     "corte_number": 2,
-    "title": "Another angle on the content",
+    "title": "Outro angulo sobre o conteudo",
     "platform": "tiktok_instagram",
     "segments": [
-      {{"start": 200.0, "end": 225.0, "description": "Hook: surprising reveal"}},
-      {{"start": 310.0, "end": 340.0, "description": "Key insight moment"}}
+      {{"start": 200.0, "end": 245.0, "description": "Hook: revelacao surpreendente"}},
+      {{"start": 310.0, "end": 365.0, "description": "Momento chave com contexto completo"}},
+      {{"start": 400.0, "end": 435.0, "description": "Conclusao impactante"}}
     ]
   }}
 ]

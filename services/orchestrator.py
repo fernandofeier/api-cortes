@@ -127,10 +127,12 @@ async def process_video_pipeline(
                 drive_folder_id,
             )
 
+            total_duration = round(sum(s.end - s.start for s in corte.segments), 1)
             generated_clips.append({
                 "corte_number": corte.corte_number,
                 "title": corte.title,
                 "platform": corte.platform,
+                "total_duration": total_duration,
                 "file_id": drive_result["id"],
                 "file_name": drive_result["name"],
                 "web_view_link": drive_result.get("webViewLink"),
@@ -293,9 +295,11 @@ async def manual_cut_pipeline(
                 drive_folder_id,
             )
 
+            total_duration = round(clip["end"] - clip["start"], 1)
             generated_clips.append({
                 "clip_number": clip_num,
                 "title": clip_title,
+                "total_duration": total_duration,
                 "file_id": drive_result["id"],
                 "file_name": drive_result["name"],
                 "web_view_link": drive_result.get("webViewLink"),
@@ -450,8 +454,10 @@ async def manual_edit_pipeline(
         # --- Step 4: Send webhook ---
         _update_job(job_id, JobStep.SENDING_WEBHOOK, "Enviando resultados...")
 
+        total_duration = round(sum(seg["end"] - seg["start"] for seg in segments), 1)
         result_payload = {
             "title": clip_title,
+            "total_duration": total_duration,
             "file_id": drive_result["id"],
             "file_name": drive_result["name"],
             "web_view_link": drive_result.get("webViewLink"),
