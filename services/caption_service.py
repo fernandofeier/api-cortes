@@ -182,23 +182,48 @@ async def _transcribe_whisper(audio_path: str) -> list[dict]:
     return blocks
 
 
-def _group_words_into_blocks(words: list[dict], max_words: int = 5) -> list[dict]:
+def _group_words_into_blocks(
+    words: list[dict],
+    max_words: int = 5,
+    pause_threshold: float = 0.7,
+) -> list[dict]:
     """
-    Group word-level timestamps into subtitle blocks of 2-5 words.
-    Uses actual word timestamps for precise sync.
+    Group word-level timestamps into subtitle blocks of up to max_words.
+    Breaks at natural speech pauses (gap >= pause_threshold) so that
+    a subtitle block never spans across scene transitions or sentence boundaries.
     """
     blocks = []
-    i = 0
-    while i < len(words):
-        chunk = words[i:i + max_words]
-        text = " ".join(w["word"].strip() for w in chunk if w.get("word", "").strip())
+    current_chunk: list[dict] = []
+
+    for word in words:
+        w_text = word.get("word", "").strip()
+        if not w_text:
+            continue
+
+        # Break on pause or max_words reached
+        if current_chunk:
+            gap = float(word["start"]) - float(current_chunk[-1]["end"])
+            if gap >= pause_threshold or len(current_chunk) >= max_words:
+                text = " ".join(w.get("word", "").strip() for w in current_chunk)
+                if text:
+                    blocks.append({
+                        "start": float(current_chunk[0]["start"]),
+                        "end": float(current_chunk[-1]["end"]),
+                        "text": text,
+                    })
+                current_chunk = []
+
+        current_chunk.append(word)
+
+    # Flush remaining words
+    if current_chunk:
+        text = " ".join(w.get("word", "").strip() for w in current_chunk)
         if text:
             blocks.append({
-                "start": float(chunk[0]["start"]),
-                "end": float(chunk[-1]["end"]),
+                "start": float(current_chunk[0]["start"]),
+                "end": float(current_chunk[-1]["end"]),
                 "text": text,
             })
-        i += max_words
 
     return blocks
 
