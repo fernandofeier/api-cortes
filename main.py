@@ -83,6 +83,22 @@ class ProcessingOptions(BaseModel):
         False,
         description="Apply subtle color grading to alter visual fingerprint (copyright avoidance)",
     )
+    pitch_shift: float = Field(
+        1.0, ge=0.9, le=1.1,
+        description="Audio pitch multiplier without speed change (1.03 = 3% higher, recommended for copyright avoidance)",
+    )
+    background_noise: float = Field(
+        0.0, ge=0.0, le=0.10,
+        description="Pink noise volume (0.0 = off, 0.03 = 3% recommended for copyright avoidance)",
+    )
+    ghost_effect: bool = Field(
+        False,
+        description="Periodic subtle brightness pulse to break temporal fingerprint (copyright avoidance)",
+    )
+    dynamic_zoom: bool = Field(
+        False,
+        description="Subtle oscillating zoom (0-2%) to alter spatial fingerprint (copyright avoidance)",
+    )
     captions: bool = Field(
         False,
         description="Generate burned-in captions (uses DeepInfra Whisper if configured, otherwise Gemini)",

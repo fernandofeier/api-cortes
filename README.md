@@ -79,8 +79,12 @@ Corte automatico com IA. Envia um video e recebe os melhores momentos cortados.
     "width": 1080,
     "height": 1920,
     "mirror": true,
-    "speed": 1.05,
+    "speed": 1.07,
     "color_filter": true,
+    "pitch_shift": 1.03,
+    "background_noise": 0.03,
+    "ghost_effect": true,
+    "dynamic_zoom": true,
     "captions": true,
     "caption_style": "bold"
   }
@@ -202,8 +206,12 @@ Disponiveis em todos os endpoints via campo `options`:
 | `width` | int | 1080 | Largura do video de saida |
 | `height` | int | 1920 | Altura do video de saida |
 | `mirror` | bool | false | Espelhar video horizontalmente |
-| `speed` | float | 1.0 | Velocidade de reproducao (1.05 recomendado para anti-copyright) |
+| `speed` | float | 1.0 | Velocidade de reproducao (1.07 recomendado para anti-copyright) |
 | `color_filter` | bool | false | Filtro sutil de cor para alterar fingerprint visual |
+| `pitch_shift` | float | 1.0 | Tom do audio sem alterar velocidade (1.03 = 3% mais agudo) |
+| `background_noise` | float | 0.0 | Volume de ruido rosa de fundo (0.03 = 3%) |
+| `ghost_effect` | bool | false | Pulso de brilho periodico para quebrar fingerprint temporal |
+| `dynamic_zoom` | bool | false | Zoom pulsante sutil (0-2%) para alterar fingerprint espacial |
 | `captions` | bool | false | Gerar legendas automaticas (burned-in) |
 | `caption_style` | string | `classic` | Estilo visual das legendas: `classic`, `bold`, `box` |
 
@@ -234,18 +242,37 @@ Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao q
 
 ### Anti-Copyright
 
-Opcoes para evitar deteccao automatica de direitos autorais (Content ID do YouTube, etc). Combine varias para maxima protecao:
+Opcoes para evitar deteccao automatica de direitos autorais (Content ID do YouTube, etc). Content ID e ~70% baseado em audio, entao as tecnicas de audio sao as mais eficazes.
+
+**Audio (alta eficacia):**
 
 | Opcao | O que faz | Eficacia |
 |-------|-----------|----------|
-| `mirror: true` | Espelha o video horizontalmente | Media (visual) |
-| `speed: 1.05` | Acelera 5% — altera fingerprint de audio | Alta (audio + visual) |
+| `pitch_shift: 1.03` | Altera tom da voz 3% sem mudar velocidade | **Muito alta** (muda espectrograma) |
+| `speed: 1.07` | Acelera 7% — altera fingerprint de audio e timing | **Alta** (audio + visual) |
+| `background_noise: 0.03` | Ruido rosa a 3% volume — nova impressao digital sonora | **Alta** (quase inaudivel) |
+
+**Video (media eficacia):**
+
+| Opcao | O que faz | Eficacia |
+|-------|-----------|----------|
 | `color_filter: true` | Ajuste sutil de brilho, contraste e saturacao | Media-alta (visual) |
+| `ghost_effect: true` | Pulso de brilho quase invisivel a cada 11s | Media-alta (temporal) |
+| `dynamic_zoom: true` | Zoom pulsante 0-2% a cada 5s | Media (espacial) |
+| `mirror: true` | Espelha o video horizontalmente | Media (visual) |
 | `layout: "blur_zoom"` | Muda composicao visual (ja e o default) | Media (visual) |
 
 **Recomendacao para maxima protecao:**
 ```json
-"options": { "mirror": true, "speed": 1.05, "color_filter": true }
+"options": {
+  "mirror": true,
+  "speed": 1.07,
+  "color_filter": true,
+  "pitch_shift": 1.03,
+  "background_noise": 0.03,
+  "ghost_effect": true,
+  "dynamic_zoom": true
+}
 ```
 
 ### Presets de Plataforma

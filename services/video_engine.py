@@ -28,6 +28,10 @@ class VideoOptions:
     mirror: bool = False
     speed: float = 1.0          # 1.0 = normal, 1.05 = 5% faster (copyright avoidance)
     color_filter: bool = False  # subtle color grading to alter visual fingerprint
+    pitch_shift: float = 1.0    # 1.0 = normal, 1.03 = 3% higher pitch (no speed change)
+    background_noise: float = 0.0  # 0.0 = off, 0.03 = 3% pink noise volume
+    ghost_effect: bool = False  # periodic brightness pulse to break temporal fingerprint
+    dynamic_zoom: bool = False  # subtle oscillating zoom (0-2%)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +137,117 @@ def _apply_speed(
         f"[{audio_label}]atempo={speed:.4f}[{aout}]",
     ]
     return ";\n".join(filters), vout, aout
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.6: PITCH SHIFT — change audio pitch without speed change
+# ---------------------------------------------------------------------------
+
+def _apply_pitch_shift(
+    audio_label: str,
+    pitch_shift: float,
+) -> tuple[str, str]:
+    """
+    Shift audio pitch without changing playback speed.
+    Uses asetrate (relabel sample rate) + atempo (compensate speed) + aresample.
+    Returns (filter_string, new_audio_label).
+    If pitch_shift is 1.0, returns empty string and original label.
+    """
+    if pitch_shift == 1.0:
+        return "", audio_label
+
+    aout = "apitch"
+    sample_rate = 44100
+    new_rate = int(sample_rate * pitch_shift)
+    atempo_factor = 1.0 / pitch_shift
+    filter_str = (
+        f"[{audio_label}]asetrate={new_rate},"
+        f"atempo={atempo_factor:.6f},"
+        f"aresample={sample_rate}[{aout}]"
+    )
+    return filter_str, aout
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: DYNAMIC ZOOM — subtle oscillating zoom (copyright avoidance)
+# ---------------------------------------------------------------------------
+
+def _apply_dynamic_zoom(
+    video_label: str,
+    opts: VideoOptions,
+    fps: int,
+) -> tuple[str, str]:
+    """
+    Apply subtle pulsing zoom (0-2%) with 5-second sine wave cycle.
+    Returns (filter_string, new_video_label).
+    Skipped for horizontal layout (unknown output dimensions).
+    """
+    if not opts.dynamic_zoom:
+        return "", video_label
+    if opts.layout == "horizontal":
+        logger.info("Dynamic zoom skipped for horizontal layout")
+        return "", video_label
+
+    vout = "vzoom"
+    w = opts.width
+    h = opts.height
+    filter_str = (
+        f"[{video_label}]zoompan="
+        f"z='1.01+0.01*sin(2*3.14159*t/5)':"
+        f"x='iw/2-(iw/zoom/2)':"
+        f"y='ih/2-(ih/zoom/2)':"
+        f"d=1:s={w}x{h}:fps={fps}[{vout}]"
+    )
+    return filter_str, vout
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: GHOST EFFECT — periodic brightness pulse (copyright avoidance)
+# ---------------------------------------------------------------------------
+
+def _apply_ghost_effect(
+    video_label: str,
+    ghost_effect: bool,
+) -> tuple[str, str]:
+    """
+    Apply periodic subtle brightness pulse to break temporal fingerprint.
+    +6% brightness for ~67ms (2 frames at 30fps) every 11 seconds.
+    Returns (filter_string, new_video_label).
+    """
+    if not ghost_effect:
+        return "", video_label
+
+    vout = "vghost"
+    filter_str = (
+        f"[{video_label}]eq=brightness=0.06:"
+        f"enable='lt(mod(t\\,11)\\,0.067)'[{vout}]"
+    )
+    return filter_str, vout
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: BACKGROUND NOISE — pink noise layer (copyright avoidance)
+# ---------------------------------------------------------------------------
+
+def _apply_background_noise(
+    audio_label: str,
+    noise_level: float,
+) -> tuple[str, str]:
+    """
+    Mix subtle pink noise into audio to create unique sonic fingerprint.
+    Uses anoisesrc (source filter) + amix within filter_complex.
+    Returns (filter_string, new_audio_label).
+    """
+    if noise_level <= 0:
+        return "", audio_label
+
+    aout = "anoise"
+    filter_str = (
+        f"anoisesrc=type=pink:r=44100:a=1.0:d=600[bg_noise];\n"
+        f"[{audio_label}][bg_noise]amix=inputs=2:"
+        f"duration=first:weights=1 {noise_level:.4f}:normalize=0[{aout}]"
+    )
+    return filter_str, aout
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +409,10 @@ def build_filter_complex(
     """
     Build the complete filter_complex string.
 
+    Chain: Trim → Fade → Speed → Pitch Shift → [Mirror → Layout → Color]
+           → Dynamic Zoom → Ghost Effect → [vout]
+           → Background Noise → [aout]
+
     Returns (filter_complex, final_video_label, final_audio_label).
     """
     trim = _build_trim_filters(segments, fps)
@@ -304,16 +423,28 @@ def build_filter_complex(
         video_label, audio_label, opts.speed
     )
 
-    style, final_video = _build_visual_style_filter(video_label, opts)
+    # Pitch shift (audio only — after speed)
+    pitch_str, audio_label = _apply_pitch_shift(audio_label, opts.pitch_shift)
 
+    # Visual style (mirror + layout + color filter)
+    style, video_label = _build_visual_style_filter(video_label, opts)
+
+    # Dynamic zoom (after visual style, before ghost effect)
+    zoom_str, video_label = _apply_dynamic_zoom(video_label, opts, fps)
+
+    # Ghost effect (last video step)
+    ghost_str, video_label = _apply_ghost_effect(video_label, opts.ghost_effect)
+
+    # Background noise (last audio step)
+    noise_str, audio_label = _apply_background_noise(audio_label, opts.background_noise)
+
+    # Assemble all filter parts
     parts = [trim]
-    if fade:
-        parts.append(fade)
-    if speed_str:
-        parts.append(speed_str)
-    parts.append(style)
+    for p in [fade, speed_str, pitch_str, style, zoom_str, ghost_str, noise_str]:
+        if p:
+            parts.append(p)
 
-    return ";\n".join(parts), final_video, audio_label
+    return ";\n".join(parts), video_label, audio_label
 
 
 def process_video(
