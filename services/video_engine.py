@@ -26,6 +26,8 @@ class VideoOptions:
     width: int = 1080
     height: int = 1920
     mirror: bool = False
+    speed: float = 1.0          # 1.0 = normal, 1.05 = 5% faster (copyright avoidance)
+    color_filter: bool = False  # subtle color grading to alter visual fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +107,32 @@ def _build_fade_filters(
         last_audio = next_audio
 
     return ";\n".join(filters), last_video, last_audio
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.5: SPEED — alter playback speed (copyright avoidance)
+# ---------------------------------------------------------------------------
+
+def _apply_speed(
+    video_label: str,
+    audio_label: str,
+    speed: float,
+) -> tuple[str, str, str]:
+    """
+    Apply speed change to video and audio streams.
+    Returns (filter_string, new_video_label, new_audio_label).
+    If speed is 1.0, returns empty string and original labels.
+    """
+    if speed == 1.0:
+        return "", video_label, audio_label
+
+    vout = "vspeed"
+    aout = "aspeed"
+    filters = [
+        f"[{video_label}]setpts=PTS/{speed:.4f}[{vout}]",
+        f"[{audio_label}]atempo={speed:.4f}[{aout}]",
+    ]
+    return ";\n".join(filters), vout, aout
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +259,7 @@ def _build_visual_style_filter(
     video_label: str,
     opts: VideoOptions,
 ) -> tuple[str, str]:
-    """Dispatch to the correct visual style builder based on layout."""
+    """Dispatch to the correct visual style builder based on layout, then apply color filter."""
     builders = {
         "blur_zoom": _build_style_blur_zoom,
         "vertical": _build_style_vertical,
@@ -239,7 +267,19 @@ def _build_visual_style_filter(
         "blur": _build_style_blur,
     }
     builder = builders.get(opts.layout, _build_style_blur_zoom)
-    return builder(video_label, opts)
+    style_str, final_label = builder(video_label, opts)
+
+    # Apply color grading if enabled (copyright avoidance)
+    if opts.color_filter:
+        color_label = "vcolor"
+        color_filter = (
+            f"[{final_label}]eq=brightness=0.04:contrast=1.06:saturation=1.12"
+            f"[{color_label}]"
+        )
+        style_str = style_str + ";\n" + color_filter
+        final_label = color_label
+
+    return style_str, final_label
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +298,19 @@ def build_filter_complex(
     """
     trim = _build_trim_filters(segments, fps)
     fade, video_label, audio_label = _build_fade_filters(segments, opts.fade_duration)
+
+    # Speed change (applied after fade, before visual style)
+    speed_str, video_label, audio_label = _apply_speed(
+        video_label, audio_label, opts.speed
+    )
+
     style, final_video = _build_visual_style_filter(video_label, opts)
 
     parts = [trim]
     if fade:
         parts.append(fade)
+    if speed_str:
+        parts.append(speed_str)
     parts.append(style)
 
     return ";\n".join(parts), final_video, audio_label

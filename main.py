@@ -75,6 +75,14 @@ class ProcessingOptions(BaseModel):
         False,
         description="Horizontal flip (mirror) the video — useful for copyright avoidance",
     )
+    speed: float = Field(
+        1.0, ge=0.9, le=1.2,
+        description="Playback speed multiplier (1.05 recommended for copyright avoidance)",
+    )
+    color_filter: bool = Field(
+        False,
+        description="Apply subtle color grading to alter visual fingerprint (copyright avoidance)",
+    )
     captions: bool = Field(
         False,
         description="Generate burned-in captions (uses DeepInfra Whisper if configured, otherwise Gemini)",

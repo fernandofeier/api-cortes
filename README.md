@@ -78,7 +78,9 @@ Corte automatico com IA. Envia um video e recebe os melhores momentos cortados.
     "fade_duration": 1.0,
     "width": 1080,
     "height": 1920,
-    "mirror": false,
+    "mirror": true,
+    "speed": 1.05,
+    "color_filter": true,
     "captions": true,
     "caption_style": "bold"
   }
@@ -200,6 +202,8 @@ Disponiveis em todos os endpoints via campo `options`:
 | `width` | int | 1080 | Largura do video de saida |
 | `height` | int | 1920 | Altura do video de saida |
 | `mirror` | bool | false | Espelhar video horizontalmente |
+| `speed` | float | 1.0 | Velocidade de reproducao (1.05 recomendado para anti-copyright) |
+| `color_filter` | bool | false | Filtro sutil de cor para alterar fingerprint visual |
 | `captions` | bool | false | Gerar legendas automaticas (burned-in) |
 | `caption_style` | string | `classic` | Estilo visual das legendas: `classic`, `bold`, `box` |
 
@@ -227,6 +231,22 @@ Quando ativado, o audio do clip e transcrito automaticamente e as legendas sao q
 | `classic` | Arial 48, branco, outline preto | Uso geral, limpo |
 | `bold` | Arial Black 52, UPPERCASE, outline grossa | Impacto viral, TikTok |
 | `box` | Arial 48, fundo preto semi-transparente | Legibilidade maxima |
+
+### Anti-Copyright
+
+Opcoes para evitar deteccao automatica de direitos autorais (Content ID do YouTube, etc). Combine varias para maxima protecao:
+
+| Opcao | O que faz | Eficacia |
+|-------|-----------|----------|
+| `mirror: true` | Espelha o video horizontalmente | Media (visual) |
+| `speed: 1.05` | Acelera 5% — altera fingerprint de audio | Alta (audio + visual) |
+| `color_filter: true` | Ajuste sutil de brilho, contraste e saturacao | Media-alta (visual) |
+| `layout: "blur_zoom"` | Muda composicao visual (ja e o default) | Media (visual) |
+
+**Recomendacao para maxima protecao:**
+```json
+"options": { "mirror": true, "speed": 1.05, "color_filter": true }
+```
 
 ### Presets de Plataforma
 
@@ -256,6 +276,7 @@ O campo `platform` e retornado no webhook para cada clip: `"youtube_shorts"`, `"
         "corte_number": 1,
         "title": "Momento dramatico",
         "platform": "youtube_shorts",
+        "total_duration": 53.0,
         "file_id": "1XYZ789...",
         "file_name": "viral-550e8400-corte1.mp4",
         "web_view_link": "https://drive.google.com/file/d/1XYZ789.../view",

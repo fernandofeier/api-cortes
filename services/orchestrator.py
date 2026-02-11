@@ -50,6 +50,8 @@ async def process_video_pipeline(
             width=options.width if options else 1080,
             height=options.height if options else 1920,
             mirror=options.mirror if options else False,
+            speed=options.speed if options else 1.0,
+            color_filter=options.color_filter if options else False,
         )
         max_clips = options.max_clips if options else 1
 
@@ -236,6 +238,8 @@ async def manual_cut_pipeline(
             width=options.width if options else 1080,
             height=options.height if options else 1920,
             mirror=options.mirror if options else False,
+            speed=options.speed if options else 1.0,
+            color_filter=options.color_filter if options else False,
         )
 
         source_path = os.path.join(work_dir, "source.mp4")
@@ -400,6 +404,8 @@ async def manual_edit_pipeline(
             width=options.width if options else 1080,
             height=options.height if options else 1920,
             mirror=options.mirror if options else False,
+            speed=options.speed if options else 1.0,
+            color_filter=options.color_filter if options else False,
         )
 
         source_path = os.path.join(work_dir, "source.mp4")
