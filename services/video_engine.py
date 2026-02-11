@@ -196,7 +196,8 @@ def _apply_dynamic_zoom(
         f"z='1.01+0.01*sin(2*3.14159*t/5)':"
         f"x='iw/2-(iw/zoom/2)':"
         f"y='ih/2-(ih/zoom/2)':"
-        f"d=1:s={w}x{h}:fps={fps}[{vout}]"
+        f"d=1:s={w}x{h}:fps={fps},"
+        f"format=yuv420p[{vout}]"
     )
     return filter_str, vout
 
@@ -220,7 +221,7 @@ def _apply_ghost_effect(
     vout = "vghost"
     filter_str = (
         f"[{video_label}]eq=brightness=0.06:"
-        f"enable='lt(mod(t\\,11)\\,0.067)'[{vout}]"
+        f"enable=lt(mod(t\\,11)\\,0.067)[{vout}]"
     )
     return filter_str, vout
 
@@ -242,10 +243,13 @@ def _apply_background_noise(
         return "", audio_label
 
     aout = "anoise"
+    # Scale noise amplitude directly, mix with defaults, then boost to compensate
+    # amix default normalization divides by number of inputs (2), so volume=2 restores level
     filter_str = (
-        f"anoisesrc=type=pink:r=44100:a=1.0:d=600[bg_noise];\n"
-        f"[{audio_label}][bg_noise]amix=inputs=2:"
-        f"duration=first:weights=1 {noise_level:.4f}:normalize=0[{aout}]"
+        f"anoisesrc=type=pink:r=44100:a={noise_level:.4f}:d=600,"
+        f"aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bg_noise];\n"
+        f"[{audio_label}][bg_noise]amix=inputs=2:duration=first,"
+        f"volume=2.0[{aout}]"
     )
     return filter_str, aout
 
