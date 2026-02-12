@@ -246,7 +246,7 @@ def _apply_background_noise(
     # Scale noise amplitude directly, mix with defaults, then boost to compensate
     # amix default normalization divides by number of inputs (2), so volume=2 restores level
     filter_str = (
-        f"anoisesrc=type=pink:r=44100:a={noise_level:.4f}:d=600,"
+        f"anoisesrc=color=pink:r=44100:a={noise_level:.4f}:d=600,"
         f"aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bg_noise];\n"
         f"[{audio_label}][bg_noise]amix=inputs=2:duration=first,"
         f"volume=2.0[{aout}]"
