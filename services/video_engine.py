@@ -193,9 +193,9 @@ def _apply_dynamic_zoom(
     h = opts.height
     filter_str = (
         f"[{video_label}]zoompan="
-        f"z='1.01+0.01*sin(2*3.14159*t/5)':"
-        f"x='iw/2-(iw/zoom/2)':"
-        f"y='ih/2-(ih/zoom/2)':"
+        f"z=1.01+0.01*sin(2*3.14159*t/5):"
+        f"x=iw/2-(iw/zoom/2):"
+        f"y=ih/2-(ih/zoom/2):"
         f"d=1:s={w}x{h}:fps={fps},"
         f"format=yuv420p[{vout}]"
     )
@@ -219,9 +219,11 @@ def _apply_ghost_effect(
         return "", video_label
 
     vout = "vghost"
+    # Embed time condition directly in brightness expression instead of using
+    # 'enable' option (not available in all FFmpeg builds).
+    # brightness = 0.06 when mod(t,11) < 0.067, else 0.0
     filter_str = (
-        f"[{video_label}]eq=brightness=0.06:"
-        f"enable=lt(mod(t\\,11)\\,0.067)[{vout}]"
+        f"[{video_label}]eq=brightness=0.06*lt(mod(t\\,11)\\,0.067)[{vout}]"
     )
     return filter_str, vout
 
