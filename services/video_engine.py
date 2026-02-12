@@ -178,10 +178,16 @@ def _apply_dynamic_zoom(
     fps: int,
 ) -> tuple[str, str]:
     """
-    Apply subtle pulsing zoom (0-2%) with 5-second sine wave cycle.
-    Uses crop+scale instead of zoompan for reliable video compatibility.
-    Crop oscillates between 100% and 98% of input (centered), then
-    scale restores target dimensions — creates a subtle zoom pulse.
+    Apply subtle spatial fingerprint alteration via oscillating pan (0-2%).
+    Uses scale (2% larger) + crop (fixed output size, oscillating position)
+    for reliable compatibility across all FFmpeg versions.
+
+    - zoompan: fails on video input ("Failed to configure output pad")
+    - crop with variable w/h: fails with odd dimensions on yuv420p
+
+    This approach keeps crop output dimensions FIXED (always even) and only
+    varies x,y position — guaranteed to work.
+
     Returns (filter_string, new_video_label).
     Skipped for horizontal layout (unknown output dimensions).
     """
@@ -194,15 +200,17 @@ def _apply_dynamic_zoom(
     vout = "vzoom"
     w = opts.width
     h = opts.height
-    # crop: w/h oscillate between iw/ih (no zoom) and iw*0.98/ih*0.98 (2% zoom)
-    # centered by default (x/y omitted = centered crop)
-    # scale: restore exact output dimensions
+    # Step 1: scale up 2% (fixed, even dims via trunc)
+    # Step 2: crop back to exact w x h with oscillating center position
+    # x oscillates across the 2% padding, y follows same sine wave
+    # Result: subtle wobble that alters spatial fingerprint frame-by-frame
     filter_str = (
         f"[{video_label}]"
-        f"crop="
-        f"w=iw-iw*0.02*(0.5+0.5*sin(2*PI*t/5)):"
-        f"h=ih-ih*0.02*(0.5+0.5*sin(2*PI*t/5)),"
-        f"scale={w}:{h}[{vout}]"
+        f"scale=trunc(iw*1.02/2)*2:trunc(ih*1.02/2)*2,"
+        f"crop={w}:{h}:"
+        f"(iw-{w})/2+(iw-{w})/2*sin(2*PI*t/5):"
+        f"(ih-{h})/2+(ih-{h})/2*sin(2*PI*t/5)"
+        f"[{vout}]"
     )
     return filter_str, vout
 
