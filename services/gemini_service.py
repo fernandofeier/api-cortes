@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -122,8 +121,6 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
     ]
   }
 ]
-
-IMPORTANT: Validate your JSON. Ensure no trailing commas. Escape quotes within strings.
 """
 
 MULTI_CLIP_PROMPT = """\
@@ -182,10 +179,7 @@ Return ONLY valid JSON, no markdown, no code fences. Format:
       {{"start": 400.0, "end": 435.0, "description": "Conclusao impactante"}}
     ]
   }}
-  }}
 ]
-
-IMPORTANT: Validate your JSON. Ensure no trailing commas. Escape quotes within strings.
 """
 
 
@@ -246,29 +240,12 @@ def _generate_analysis(client: genai.Client, uploaded_file, prompt: str):
     return response
 
 
-def _extract_json_payload(text: str) -> str:
-    """
-    Robustly extract JSON block from text using regex.
-    Finds the first '[' or '{' and the last ']' or '}'.
-    """
-    text = text.strip()
-    
-    # Try to find a JSON array first (since we expect a list of Cortes)
-    array_match = re.search(r'\[.*\]', text, re.DOTALL)
-    if array_match:
-        return array_match.group(0)
-    
-    # Fallback to finding a JSON object
-    object_match = re.search(r'\{.*\}', text, re.DOTALL)
-    if object_match:
-        return object_match.group(0)
-    
-    # Fallback: standard strip code fences if regex fails
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown code fences if present."""
     if text.startswith("```"):
         lines = text.split("\n")
         lines = [line for line in lines if not line.strip().startswith("```")]
         return "\n".join(lines)
-        
     return text
 
 
@@ -286,16 +263,8 @@ def _parse_cortes(raw_text: str) -> list[Corte]:
     """Parse Gemini JSON response into a list of Corte objects."""
     logger.info(f"Gemini raw response (first 500 chars): {raw_text[:500]}")
 
-    logger.info(f"Gemini raw response (first 500 chars): {raw_text[:500]}")
-
-    text = _extract_json_payload(raw_text)
-    
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON Decode Error: {e}")
-        logger.error(f"Failed JSON payload (first 1000 chars): {text[:1000]}")
-        raise
+    text = _strip_code_fences(raw_text)
+    data = json.loads(text)
 
     cortes: list[Corte] = []
     for item in data:
