@@ -179,6 +179,9 @@ def _apply_dynamic_zoom(
 ) -> tuple[str, str]:
     """
     Apply subtle pulsing zoom (0-2%) with 5-second sine wave cycle.
+    Uses crop+scale instead of zoompan for reliable video compatibility.
+    Crop oscillates between 100% and 98% of input (centered), then
+    scale restores target dimensions — creates a subtle zoom pulse.
     Returns (filter_string, new_video_label).
     Skipped for horizontal layout (unknown output dimensions).
     """
@@ -191,13 +194,15 @@ def _apply_dynamic_zoom(
     vout = "vzoom"
     w = opts.width
     h = opts.height
+    # crop: w/h oscillate between iw/ih (no zoom) and iw*0.98/ih*0.98 (2% zoom)
+    # centered by default (x/y omitted = centered crop)
+    # scale: restore exact output dimensions
     filter_str = (
-        f"[{video_label}]zoompan="
-        f"z=1.01+0.01*sin(2*3.14159*t/5):"
-        f"x=iw/2-(iw/zoom/2):"
-        f"y=ih/2-(ih/zoom/2):"
-        f"d=1:s={w}x{h}:fps={fps},"
-        f"format=yuv420p[{vout}]"
+        f"[{video_label}]"
+        f"crop="
+        f"w=iw-iw*0.02*(0.5+0.5*sin(2*PI*t/5)):"
+        f"h=ih-ih*0.02*(0.5+0.5*sin(2*PI*t/5)),"
+        f"scale={w}:{h}[{vout}]"
     )
     return filter_str, vout
 
