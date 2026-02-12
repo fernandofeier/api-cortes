@@ -259,12 +259,41 @@ def _validate_segment(seg: VideoSegment) -> bool:
     return True
 
 
+def _repair_json(text: str) -> str:
+    """Attempt to repair common Gemini JSON issues."""
+    import re
+    text = text.strip()
+
+    # Remove markdown code fences
+    text = re.sub(r"^```\w*\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # Fix trailing commas before } or ]
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # If truncated mid-string, close at last complete object
+    if text and not text.endswith("]"):
+        last_brace = text.rfind("}")
+        if last_brace > 0:
+            text = text[:last_brace + 1] + "]"
+            logger.warning("JSON appeared truncated, attempted repair")
+
+    return text
+
+
 def _parse_cortes(raw_text: str) -> list[Corte]:
     """Parse Gemini JSON response into a list of Corte objects."""
     logger.info(f"Gemini raw response (first 500 chars): {raw_text[:500]}")
 
     text = _strip_code_fences(raw_text)
-    data = json.loads(text)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("Initial JSON parse failed, attempting repair")
+        text = _repair_json(raw_text)
+        data = json.loads(text)
 
     cortes: list[Corte] = []
     for item in data:
