@@ -407,7 +407,7 @@ def _build_visual_style_filter(
     if opts.color_filter:
         color_label = "vcolor"
         color_filter = (
-            f"[{final_label}]eq=brightness=0.04:contrast=1.06:saturation=1.12"
+            f"[{final_label}]eq=brightness=-0.03:contrast=1.15:saturation=1.3:gamma=0.95"
             f"[{color_label}]"
         )
         style_str = style_str + ";\n" + color_filter
