@@ -324,7 +324,7 @@ app = FastAPI(
 
 @app.get("/", response_model=HealthResponse)
 async def health_check():
-    cached = get_cached_license()
+    cached = await ensure_valid_license()
     lic = "valid" if cached.valid else "invalid"
     return HealthResponse(status="ok", version=settings.app_version, license=lic)
 

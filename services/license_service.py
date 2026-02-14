@@ -7,8 +7,8 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Cache TTL in seconds — revalidates if cache is older than this
-CACHE_TTL_SECONDS = 300  # 5 minutes
+# Cache TTL in seconds — 0 means always revalidate on every request
+CACHE_TTL_SECONDS = 0
 
 
 class LicenseStatus:
