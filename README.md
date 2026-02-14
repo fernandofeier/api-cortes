@@ -18,12 +18,14 @@ Edite o `.env`:
 
 | Variavel | Obrigatorio | Descricao |
 |----------|-------------|-----------|
+| `LICENSE_KEY` | Sim | Chave de licenca (fornecida na compra) |
 | `GEMINI_API_KEY` | Sim | Chave da API Google Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) |
-| `API_KEY` | Sim | Chave para autenticar chamadas a API |
 | `APP_BASE_URL` | Sim | URL publica da API (ex: `https://api.seudominio.com`) |
 | `GEMINI_MODEL` | Nao | Modelo Gemini para analise e transcricao (default: `gemini-3-flash-preview`) |
 | `DEEPINFRA_API_KEY` | Nao | Chave DeepInfra para legendas via Whisper (mais preciso). Se vazio, usa Gemini |
 | `MAX_UPLOAD_SIZE_MB` | Nao | Limite de tamanho de video em MB (default: `2000`) |
+
+> A `LICENSE_KEY` e usada tanto como chave de autenticacao (header `X-API-Key`) quanto como identificador da licenca.
 
 ### 2. Configure o Google Drive (OAuth2)
 
@@ -38,28 +40,40 @@ Edite o `.env`:
 
 ```bash
 curl -X POST {APP_BASE_URL}/v1/upload-credentials \
-  -H "X-API-Key: SUA_API_KEY" \
+  -H "X-API-Key: SUA_LICENSE_KEY" \
   -F "file=@client_secret.json"
 ```
 
 **Autorizar o Drive:**
 
 - **Via terminal**: `python3 scripts/auth_drive.py`
-- **Via navegador**: acesse `{APP_BASE_URL}/auth/drive?key=SUA_API_KEY`
+- **Via navegador**: acesse `{APP_BASE_URL}/auth/drive?key=SUA_LICENSE_KEY`
 
 ### 3. Suba o container
 
 ```bash
 docker compose up -d --build
 curl http://localhost:8000/
-# {"status":"ok","version":"1.0.0"}
+# {"status":"ok","version":"1.0.0","license":"valid"}
 ```
 
 ---
 
 ## Endpoints
 
-Todas as chamadas `/v1/*` exigem o header `X-API-Key`.
+Todas as chamadas `/v1/*` exigem o header `X-API-Key` com sua `LICENSE_KEY`.
+
+### GET /
+
+Health check. Retorna status da API e da licenca (valida em tempo real contra o servidor).
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "license": "valid"
+}
+```
 
 ### POST /v1/process
 
@@ -175,7 +189,50 @@ Consulta o status de um job.
 }
 ```
 
-**Status possiveis:** `queued` → `downloading` → `analyzing` → `processing` → `uploading` → `finishing` → `completed` | `error`
+**Status possiveis:** `queued` → `downloading` → `analyzing` → `processing` → `uploading` → `finishing` → `completed` | `error` | `cancelled`
+
+### DELETE /v1/status/{job_id}
+
+Cancela um job em andamento. O cancelamento e cooperativo — a operacao atual (FFmpeg, download, upload) termina antes do job parar.
+
+```bash
+curl -X DELETE http://localhost:8000/v1/status/{job_id} \
+  -H "X-API-Key: SUA_LICENSE_KEY"
+```
+
+**Resposta:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "cancellation_requested",
+  "message": "Cancellation requested. Current stage: processing"
+}
+```
+
+**Regras:**
+- Funciona em qualquer status exceto `completed`, `error` e `cancelled` (retorna 422)
+- Apos cancelamento, um webhook e enviado com `"status": "cancelled"`
+- Jobs que ja terminaram nao podem ser cancelados
+
+### POST /v1/revalidate
+
+Forca revalidacao imediata da licenca contra o servidor. Util apos alteracoes na licenca.
+
+```bash
+curl -X POST http://localhost:8000/v1/revalidate \
+  -H "X-API-Key: SUA_LICENSE_KEY"
+```
+
+**Resposta:**
+```json
+{
+  "valid": true,
+  "user_name": "Fernando",
+  "expires_at": "2026-12-31T23:59:59+00:00"
+}
+```
+
+> Este endpoint funciona mesmo quando a licenca esta marcada como invalida (usa autenticacao leve).
 
 ### POST /v1/upload-credentials
 
@@ -183,11 +240,11 @@ Envia o `client_secret.json` do Google OAuth via API.
 
 ```bash
 curl -X POST http://localhost:8000/v1/upload-credentials \
-  -H "X-API-Key: sua-api-key" \
+  -H "X-API-Key: SUA_LICENSE_KEY" \
   -F "file=@client_secret.json"
 ```
 
-### GET /auth/drive?key=SUA_API_KEY
+### GET /auth/drive?key=SUA_LICENSE_KEY
 
 Pagina web para autorizar o Google Drive via navegador.
 
@@ -318,6 +375,15 @@ O campo `platform` e retornado no webhook para cada clip: `"youtube_shorts"`, `"
 }
 ```
 
+**Cancelamento:**
+```json
+{
+  "job_id": "550e8400-...",
+  "status": "cancelled",
+  "original_file_id": "1ABC123def456"
+}
+```
+
 **Erro:**
 ```json
 {
@@ -330,6 +396,26 @@ O campo `platform` e retornado no webhook para cada clip: `"youtube_shorts"`, `"
   }
 }
 ```
+
+---
+
+## Licenca
+
+Esta API requer uma licenca valida para funcionar. A licenca e validada em tempo real a cada chamada.
+
+**Como funciona:**
+- A `LICENSE_KEY` no `.env` e sua chave de acesso
+- Cada chamada valida a licenca contra o servidor antes de processar
+- Se a licenca for desativada, o bloqueio e imediato na proxima chamada
+- Use `POST /v1/revalidate` para verificar o status da licenca manualmente
+
+**Codigos de erro:**
+
+| HTTP | Descricao |
+|------|-----------|
+| 401 | Chave ausente ou invalida |
+| 403 | Licenca invalida ou expirada |
+| 503 | LICENSE_KEY nao configurada |
 
 ---
 
