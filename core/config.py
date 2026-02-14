@@ -42,8 +42,13 @@ class Settings(BaseSettings):
     telegram_default_drive_folder: str = ""
     telegram_default_webhook_url: str = ""
 
-    # --- Auth ---
-    api_key: str = "changeme-default-key-2024"
+    # --- License ---
+    license_key: str = ""
+
+    # --- Supabase (hardcoded — not exposed to user) ---
+    supabase_url: str = "https://hywfcvacbcqgusloawdu.supabase.co"
+    supabase_anon_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh5d2ZjdmFjYmNxZ3VzbG9hd2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwMTkyODgsImV4cCI6MjA4NjU5NTI4OH0.sgQo6jVuCmKh3qWqV8W7c8OZnt9aBzYsPIGaE8OOeuE"
+    api_slug: str = "api-cortes"
 
     # --- App ---
     app_title: str = "Viral Video Cutter API"

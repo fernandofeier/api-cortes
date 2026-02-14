@@ -16,8 +16,9 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, BeforeValidator, Field, HttpUrl
 
 from core.config import settings
-from core.job_store import cleanup_old_jobs, create_job, get_job
+from core.job_store import JobStep, cancel_job, cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
+from services.license_service import get_cached_license, is_configured as license_configured, validate_license
 from services.orchestrator import manual_cut_pipeline, manual_edit_pipeline, process_video_pipeline
 from services.telegram_bot import start_telegram_bot, stop_telegram_bot
 
@@ -38,8 +39,15 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 async def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
-    if not api_key or not secrets.compare_digest(api_key, settings.api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    if not settings.license_key:
+        raise HTTPException(status_code=503, detail="LICENSE_KEY not configured")
+    if not secrets.compare_digest(api_key, settings.license_key):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    cached = get_cached_license()
+    if not cached.valid:
+        raise HTTPException(status_code=403, detail="License invalid or expired")
     return api_key
 
 
@@ -205,6 +213,7 @@ class ManualEditRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
+    license: str = "not_configured"
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +253,39 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = httpx.AsyncClient(timeout=settings.webhook_timeout)
 
+    # --- License validation ---
+    license_task = None
+    if license_configured():
+        status = await validate_license(settings.license_key)
+        if not status.valid:
+            logger.error(
+                "LICENSE INVALID — API will reject all requests. "
+                "Check your LICENSE_KEY and Supabase configuration."
+            )
+        else:
+            exp_info = f", expires {status.expires_at.date()}" if status.expires_at else ""
+            logger.info(f"License valid for: {status.user_name}{exp_info}")
+
+        # Periodic license revalidation (every hour)
+        async def _license_revalidation_loop():
+            while True:
+                await asyncio.sleep(3600)
+                try:
+                    result = await validate_license(settings.license_key)
+                    if result.valid:
+                        logger.info(f"License revalidation OK ({result.user_name})")
+                    else:
+                        logger.warning("License revalidation FAILED — requests will be rejected")
+                except Exception as e:
+                    logger.warning(f"License revalidation error: {e}")
+
+        license_task = asyncio.create_task(_license_revalidation_loop())
+    else:
+        logger.error(
+            "LICENSE NOT CONFIGURED — set LICENSE_KEY, SUPABASE_URL, and "
+            "SUPABASE_ANON_KEY in your .env file. API will reject all requests."
+        )
+
     # Periodic cleanup of expired jobs (every hour)
     async def _job_cleanup_loop():
         while True:
@@ -264,6 +306,8 @@ async def lifespan(app: FastAPI):
 
     await stop_telegram_bot()
     cleanup_task.cancel()
+    if license_task:
+        license_task.cancel()
     await app.state.http_client.aclose()
     logger.info("Application shut down")
 
@@ -280,7 +324,9 @@ app = FastAPI(
 
 @app.get("/", response_model=HealthResponse)
 async def health_check():
-    return HealthResponse(status="ok", version=settings.app_version)
+    cached = get_cached_license()
+    lic = "valid" if cached.valid else "invalid"
+    return HealthResponse(status="ok", version=settings.app_version, license=lic)
 
 
 @app.post("/v1/process", response_model=ProcessAcceptedResponse, status_code=202)
@@ -339,6 +385,27 @@ async def get_job_status(job_id: str, _key: str = Depends(verify_api_key)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.to_dict()
+
+
+@app.delete("/v1/status/{job_id}")
+async def cancel_job_endpoint(job_id: str, _key: str = Depends(verify_api_key)):
+    """Request cancellation of a running job."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status in (JobStep.COMPLETED, JobStep.ERROR, JobStep.CANCELLED):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot cancel job in '{job.status.value}' state",
+        )
+
+    cancel_job(job_id)
+    return {
+        "job_id": job_id,
+        "status": "cancellation_requested",
+        "message": f"Cancellation requested. Current stage: {job.status.value}",
+    }
 
 
 @app.post("/v1/manual-cut", response_model=ProcessAcceptedResponse, status_code=202)
@@ -490,7 +557,7 @@ async def upload_credentials(
 @app.get("/auth/drive", response_class=HTMLResponse)
 async def auth_drive_page(key: str = Query(None)):
     """Web page to start Google Drive authorization. Requires API key as query param."""
-    if not key or not secrets.compare_digest(key, settings.api_key):
+    if not key or not settings.license_key or not secrets.compare_digest(key, settings.license_key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key (?key=YOUR_KEY)")
 
     if is_drive_authorized():

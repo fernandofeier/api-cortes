@@ -7,7 +7,7 @@ import tempfile
 import httpx
 
 from core.config import settings
-from core.job_store import JobStep, get_job
+from core.job_store import Job, JobStep, get_job
 from services.drive_service import download_file, upload_file
 from services.gemini_service import AnalysisResult, Corte, analyze_video
 from services.caption_service import add_captions
@@ -21,6 +21,36 @@ def _update_job(job_id: str, status: JobStep, message: str) -> None:
     job = get_job(job_id)
     if job:
         job.update(status, message)
+
+
+async def _check_cancelled(
+    job_id: str,
+    webhook_url: str,
+    file_id: str,
+    http_client: httpx.AsyncClient,
+) -> bool:
+    """Check if a job was cancelled. If so, update status and send webhook."""
+    job = get_job(job_id)
+    if not job or not job.cancelled:
+        return False
+
+    logger.info(f"[{job_id}] Cancellation detected — aborting pipeline")
+    job.update(JobStep.CANCELLED, "Cancelled by user")
+
+    try:
+        await send_webhook(
+            http_client=http_client,
+            url=webhook_url,
+            payload={
+                "job_id": job_id,
+                "status": "cancelled",
+                "original_file_id": file_id,
+            },
+        )
+    except Exception as e:
+        logger.error(f"[{job_id}] Failed to send cancellation webhook: {e}")
+
+    return True
 
 
 async def process_video_pipeline(
@@ -71,6 +101,9 @@ async def process_video_pipeline(
         size_mb = os.path.getsize(source_path) / (1024 * 1024)
         _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
 
+        if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+            return
+
         # --- Step 2: Analyze with Gemini ---
         _update_job(job_id, JobStep.ANALYZING, "Analisando video...")
         analysis: AnalysisResult = await analyze_video(
@@ -88,6 +121,9 @@ async def process_video_pipeline(
             job_id, JobStep.ANALYZING,
             f"Analise concluida — {len(cortes)} corte(s) identificado(s)",
         )
+
+        if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+            return
 
         # --- Step 3: Process each corte with FFmpeg ---
         generated_clips = []
@@ -119,6 +155,9 @@ async def process_video_pipeline(
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {corte_label} complete: {output_size_mb:.1f} MB")
+
+            if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+                return
 
             # --- Step 4: Upload each corte ---
             _update_job(
@@ -262,6 +301,9 @@ async def manual_cut_pipeline(
         size_mb = os.path.getsize(source_path) / (1024 * 1024)
         _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
 
+        if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+            return
+
         # --- Step 2: Process each clip with FFmpeg ---
         generated_clips = []
 
@@ -293,6 +335,9 @@ async def manual_cut_pipeline(
 
             output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"[{job_id}] {clip_label} complete: {output_size_mb:.1f} MB")
+
+            if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+                return
 
             # --- Step 3: Upload each clip ---
             _update_job(
@@ -432,6 +477,9 @@ async def manual_edit_pipeline(
         size_mb = os.path.getsize(source_path) / (1024 * 1024)
         _update_job(job_id, JobStep.DOWNLOADING, f"Download concluido ({size_mb:.1f} MB)")
 
+        if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+            return
+
         # --- Step 2: Process all segments into one video with crossfade ---
         clip_title = title or "Edited clip"
         _update_job(
@@ -458,6 +506,9 @@ async def manual_edit_pipeline(
 
         output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
         logger.info(f"[{job_id}] Edit complete: {output_size_mb:.1f} MB")
+
+        if await _check_cancelled(job_id, webhook_url, file_id, http_client):
+            return
 
         # --- Step 3: Upload ---
         _update_job(job_id, JobStep.UPLOADING, "Enviando para o Drive...")

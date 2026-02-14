@@ -17,6 +17,7 @@ class JobStep(str, Enum):
     SENDING_WEBHOOK = "finishing"
     COMPLETED = "completed"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -30,6 +31,7 @@ class Job:
     updated_at: float = field(default_factory=time.time)
     result: dict | None = None
     error: dict | None = None
+    cancelled: bool = False
 
     def update(self, status: JobStep, message: str) -> None:
         self.status = status
@@ -63,6 +65,17 @@ def create_job(job_id: str, file_id: str, webhook_url: str) -> Job:
 
 def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
+
+
+def cancel_job(job_id: str) -> bool:
+    """Mark a job as cancelled. Returns True if successful."""
+    job = _jobs.get(job_id)
+    if not job:
+        return False
+    if job.status in (JobStep.COMPLETED, JobStep.ERROR, JobStep.CANCELLED):
+        return False
+    job.cancelled = True
+    return True
 
 
 def cleanup_old_jobs() -> int:
