@@ -18,7 +18,7 @@ from pydantic import BaseModel, BeforeValidator, Field, HttpUrl
 from core.config import settings
 from core.job_store import JobStep, cancel_job, cleanup_old_jobs, create_job, get_job
 from services.auth_service import exchange_code, get_auth_url, is_drive_authorized
-from services.license_service import get_cached_license, is_configured as license_configured, validate_license
+from services.license_service import ensure_valid_license, get_cached_license, is_configured as license_configured, validate_license
 from services.orchestrator import manual_cut_pipeline, manual_edit_pipeline, process_video_pipeline
 from services.telegram_bot import start_telegram_bot, stop_telegram_bot
 
@@ -45,7 +45,7 @@ async def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
         raise HTTPException(status_code=503, detail="LICENSE_KEY not configured")
     if not secrets.compare_digest(api_key, settings.license_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    cached = get_cached_license()
+    cached = await ensure_valid_license()
     if not cached.valid:
         raise HTTPException(status_code=403, detail="License invalid or expired")
     return api_key
@@ -266,10 +266,10 @@ async def lifespan(app: FastAPI):
             exp_info = f", expires {status.expires_at.date()}" if status.expires_at else ""
             logger.info(f"License valid for: {status.user_name}{exp_info}")
 
-        # Periodic license revalidation (every hour)
+        # Periodic license revalidation (every 5 minutes)
         async def _license_revalidation_loop():
             while True:
-                await asyncio.sleep(3600)
+                await asyncio.sleep(300)
                 try:
                     result = await validate_license(settings.license_key)
                     if result.valid:
@@ -405,6 +405,25 @@ async def cancel_job_endpoint(job_id: str, _key: str = Depends(verify_api_key)):
         "job_id": job_id,
         "status": "cancellation_requested",
         "message": f"Cancellation requested. Current stage: {job.status.value}",
+    }
+
+
+@app.post("/v1/revalidate")
+async def revalidate_license_endpoint(api_key: str = Security(_api_key_header)):
+    """Force immediate license revalidation against Supabase.
+
+    Uses lighter auth (key check only, no license check) so it works
+    even when the license is currently marked invalid.
+    """
+    if not api_key or not settings.license_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    if not secrets.compare_digest(api_key, settings.license_key):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    result = await validate_license(settings.license_key)
+    return {
+        "valid": result.valid,
+        "user_name": result.user_name,
+        "expires_at": result.expires_at.isoformat() if result.expires_at else None,
     }
 
 

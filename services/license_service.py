@@ -7,6 +7,9 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Cache TTL in seconds — revalidates if cache is older than this
+CACHE_TTL_SECONDS = 300  # 5 minutes
+
 
 class LicenseStatus:
     def __init__(self):
@@ -16,7 +19,7 @@ class LicenseStatus:
         self.last_check: datetime | None = None
 
 
-# Global cache — validated on startup, re-checked every hour
+# Global cache — validated on startup, re-checked periodically
 _license_cache = LicenseStatus()
 
 
@@ -88,6 +91,21 @@ async def validate_license(license_key: str) -> LicenseStatus:
     except Exception:
         pass  # non-critical
 
+    return _license_cache
+
+
+def is_cache_stale() -> bool:
+    """Check if the cached license needs revalidation."""
+    if _license_cache.last_check is None:
+        return True
+    age = (datetime.now(timezone.utc) - _license_cache.last_check).total_seconds()
+    return age > CACHE_TTL_SECONDS
+
+
+async def ensure_valid_license() -> LicenseStatus:
+    """Return cached license if fresh, otherwise revalidate first."""
+    if is_cache_stale() and settings.license_key:
+        await validate_license(settings.license_key)
     return _license_cache
 
 
