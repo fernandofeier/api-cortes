@@ -1,0 +1,42 @@
+# Git
+.git/
+.gitignore
+
+# Environment and credentials (NEVER include in image)
+.env
+credentials/
+service-account.json
+client_secret.json
+token.json
+*.session
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Media files
+*.mp4
+*.mkv
+*.avi
+*.mov
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Docs
+README.md
+LICENSE
