@@ -9,6 +9,7 @@ import httpx
 from core.config import settings
 from core.job_store import Job, JobStep, get_job
 from services.drive_service import download_file, upload_file
+from services.face_tracking import analyze_face_positions
 from services.gemini_service import AnalysisResult, Corte, analyze_video
 from services.caption_service import add_captions
 from services.video_engine import Segment, VideoOptions, process_video
@@ -86,6 +87,7 @@ async def process_video_pipeline(
             background_noise=options.background_noise if options else 0.0,
             ghost_effect=options.ghost_effect if options else False,
             dynamic_zoom=options.dynamic_zoom if options else False,
+            face_tracking=options.face_tracking if options else False,
         )
         max_clips = options.max_clips if options else 1
 
@@ -130,6 +132,26 @@ async def process_video_pipeline(
 
         for i, corte in enumerate(cortes):
             corte_label = f"Corte {corte.corte_number}/{len(cortes)}"
+
+            engine_segments = [
+                Segment(start=s.start, end=s.end) for s in corte.segments
+            ]
+
+            # Face tracking analysis (optional, non-fatal)
+            if video_opts.face_tracking and video_opts.layout in ("vertical", "blur_zoom"):
+                _update_job(
+                    job_id, JobStep.PROCESSING,
+                    f"Analisando faces para {corte_label}...",
+                )
+                trajectory = await analyze_face_positions(
+                    source_path, engine_segments,
+                    video_opts.width, video_opts.height,
+                    video_opts.fade_duration, video_opts.speed,
+                )
+                video_opts._crop_trajectory = trajectory
+            else:
+                video_opts._crop_trajectory = None
+
             _update_job(
                 job_id, JobStep.PROCESSING,
                 f"Gerando {corte_label}: '{corte.title}'...",
@@ -137,10 +159,6 @@ async def process_video_pipeline(
 
             output_name = f"viral-{job_id[:8]}-corte{corte.corte_number}.mp4"
             output_path = os.path.join(work_dir, output_name)
-
-            engine_segments = [
-                Segment(start=s.start, end=s.end) for s in corte.segments
-            ]
 
             await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
 
@@ -287,6 +305,7 @@ async def manual_cut_pipeline(
             background_noise=options.background_noise if options else 0.0,
             ghost_effect=options.ghost_effect if options else False,
             dynamic_zoom=options.dynamic_zoom if options else False,
+            face_tracking=options.face_tracking if options else False,
         )
 
         source_path = os.path.join(work_dir, "source.mp4")
@@ -312,6 +331,23 @@ async def manual_cut_pipeline(
             clip_title = clip.get("title") or f"Clip {clip_num}"
             clip_label = f"Clip {clip_num}/{len(clips)}"
 
+            engine_segments = [Segment(start=clip["start"], end=clip["end"])]
+
+            # Face tracking analysis (optional, non-fatal)
+            if video_opts.face_tracking and video_opts.layout in ("vertical", "blur_zoom"):
+                _update_job(
+                    job_id, JobStep.PROCESSING,
+                    f"Analisando faces para {clip_label}...",
+                )
+                trajectory = await analyze_face_positions(
+                    source_path, engine_segments,
+                    video_opts.width, video_opts.height,
+                    video_opts.fade_duration, video_opts.speed,
+                )
+                video_opts._crop_trajectory = trajectory
+            else:
+                video_opts._crop_trajectory = None
+
             _update_job(
                 job_id, JobStep.PROCESSING,
                 f"Gerando {clip_label}: '{clip_title}'...",
@@ -319,8 +355,6 @@ async def manual_cut_pipeline(
 
             output_name = f"clip-{job_id[:8]}-{clip_num}.mp4"
             output_path = os.path.join(work_dir, output_name)
-
-            engine_segments = [Segment(start=clip["start"], end=clip["end"])]
 
             await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
 
@@ -463,6 +497,7 @@ async def manual_edit_pipeline(
             dynamic_zoom=options.dynamic_zoom if options else False,
             speed=options.speed if options else 1.0,
             color_filter=options.color_filter if options else False,
+            face_tracking=options.face_tracking if options else False,
         )
 
         source_path = os.path.join(work_dir, "source.mp4")
@@ -482,6 +517,26 @@ async def manual_edit_pipeline(
 
         # --- Step 2: Process all segments into one video with crossfade ---
         clip_title = title or "Edited clip"
+
+        engine_segments = [
+            Segment(start=seg["start"], end=seg["end"]) for seg in segments
+        ]
+
+        # Face tracking analysis (optional, non-fatal)
+        if video_opts.face_tracking and video_opts.layout in ("vertical", "blur_zoom"):
+            _update_job(
+                job_id, JobStep.PROCESSING,
+                "Analisando faces no video...",
+            )
+            trajectory = await analyze_face_positions(
+                source_path, engine_segments,
+                video_opts.width, video_opts.height,
+                video_opts.fade_duration, video_opts.speed,
+            )
+            video_opts._crop_trajectory = trajectory
+        else:
+            video_opts._crop_trajectory = None
+
         _update_job(
             job_id, JobStep.PROCESSING,
             f"Gerando video '{clip_title}' ({len(segments)} segmentos)...",
@@ -489,10 +544,6 @@ async def manual_edit_pipeline(
 
         output_name = f"edit-{job_id[:8]}.mp4"
         output_path = os.path.join(work_dir, output_name)
-
-        engine_segments = [
-            Segment(start=seg["start"], end=seg["end"]) for seg in segments
-        ]
 
         await asyncio.to_thread(process_video, source_path, output_path, engine_segments, video_opts)
 

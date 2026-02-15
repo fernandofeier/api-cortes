@@ -107,6 +107,11 @@ class ProcessingOptions(BaseModel):
         False,
         description="Subtle oscillating zoom (0-2%) to alter spatial fingerprint (copyright avoidance)",
     )
+    face_tracking: bool = Field(
+        False,
+        description="Track faces to keep them centered in vertical crop. "
+        "Works with vertical and blur_zoom layouts. Adds ~15-30s to processing.",
+    )
     captions: bool = Field(
         False,
         description="Generate burned-in captions (uses DeepInfra Whisper if configured, otherwise Gemini)",

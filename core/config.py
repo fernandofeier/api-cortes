@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     supabase_anon_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh5d2ZjdmFjYmNxZ3VzbG9hd2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwMTkyODgsImV4cCI6MjA4NjU5NTI4OH0.sgQo6jVuCmKh3qWqV8W7c8OZnt9aBzYsPIGaE8OOeuE"
     api_slug: str = "api-cortes"
 
+    # --- Face Tracking ---
+    face_tracking_sample_fps: float = 6.0    # frames/s to sample for detection
+    face_tracking_smoothing: float = 0.15   # EMA alpha (lower = smoother camera)
+    face_tracking_confidence: float = 0.5   # MediaPipe min detection confidence
+
     # --- App ---
     app_title: str = "Viral Video Cutter API"
     app_version: str = "1.0.0"

@@ -32,6 +32,8 @@ class VideoOptions:
     background_noise: float = 0.0  # 0.0 = off, 0.03 = 3% pink noise volume
     ghost_effect: bool = False  # periodic brightness pulse to break temporal fingerprint
     dynamic_zoom: bool = False  # subtle oscillating zoom (0-2%)
+    face_tracking: bool = False # dynamic crop following faces (vertical layouts)
+    _crop_trajectory: object = None  # CropTrajectory | None — set by orchestrator
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +287,7 @@ def _apply_mirror(video_label: str, parts: list[str], mirror: bool) -> str:
 def _build_style_blur_zoom(video_label: str, opts: VideoOptions) -> tuple[str, str]:
     """
     Default layout: blur background + zoomed foreground + overlay (9:16).
+    With face tracking: foreground crop x follows the detected face.
     """
     out_w = opts.width
     out_h = opts.height
@@ -305,10 +308,18 @@ def _build_style_blur_zoom(video_label: str, opts: VideoOptions) -> tuple[str, s
         f"scale={out_w}:{out_h}[bg]"
     )
 
-    parts.append(
-        f"[fg_src]scale={opts.zoom_level}:-2,"
-        f"crop={out_w}:ih:(iw-{out_w})/2:0[fg]"
-    )
+    traj = opts._crop_trajectory
+    if traj and traj.crop_x_expr:
+        # Dynamic foreground crop — x follows face
+        parts.append(
+            f"[fg_src]scale={opts.zoom_level}:-2,"
+            f"crop={out_w}:ih:{traj.crop_x_expr}:0[fg]"
+        )
+    else:
+        parts.append(
+            f"[fg_src]scale={opts.zoom_level}:-2,"
+            f"crop={out_w}:ih:(iw-{out_w})/2:0[fg]"
+        )
 
     parts.append(
         f"[bg][fg]overlay=x=0:y=(H-h)/2,"
@@ -323,6 +334,7 @@ def _build_style_vertical(video_label: str, opts: VideoOptions) -> tuple[str, st
     """
     Simple vertical crop from center — no blur background.
     Scales to fill height, then crops width centered.
+    With face tracking: crop x follows the detected face trajectory.
     """
     out_w = opts.width
     out_h = opts.height
@@ -330,12 +342,22 @@ def _build_style_vertical(video_label: str, opts: VideoOptions) -> tuple[str, st
     parts: list[str] = []
     video_label = _apply_mirror(video_label, parts, opts.mirror)
 
-    parts.append(
-        f"[{video_label}]scale=-2:{out_h}:"
-        f"force_original_aspect_ratio=increase,"
-        f"crop={out_w}:{out_h},"
-        f"setsar=1[vout]"
-    )
+    traj = opts._crop_trajectory
+    if traj and traj.crop_x_expr:
+        # Dynamic crop — x follows face, y stays centered
+        parts.append(
+            f"[{video_label}]scale=-2:{out_h}:"
+            f"force_original_aspect_ratio=increase,"
+            f"crop={out_w}:{out_h}:{traj.crop_x_expr}:(ih-{out_h})/2,"
+            f"setsar=1[vout]"
+        )
+    else:
+        parts.append(
+            f"[{video_label}]scale=-2:{out_h}:"
+            f"force_original_aspect_ratio=increase,"
+            f"crop={out_w}:{out_h},"
+            f"setsar=1[vout]"
+        )
 
     return ";\n".join(parts), "vout"
 
