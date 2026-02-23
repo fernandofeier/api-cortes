@@ -45,9 +45,12 @@ async def verify_api_key(api_key: str = Security(_api_key_header)) -> str:
         raise HTTPException(status_code=503, detail="LICENSE_KEY not configured")
     if not secrets.compare_digest(api_key, settings.license_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    cached = await ensure_valid_license()
-    if not cached.valid:
-        raise HTTPException(status_code=403, detail="License invalid or expired")
+    
+    if is_drive_authorized():
+        cached = await ensure_valid_license()
+        if not cached.valid:
+            raise HTTPException(status_code=403, detail="License invalid or expired")
+            
     return api_key
 
 
@@ -259,32 +262,19 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=settings.webhook_timeout)
 
     # --- License validation ---
-    license_task = None
     if license_configured():
-        status = await validate_license(settings.license_key)
-        if not status.valid:
-            logger.error(
-                "LICENSE INVALID — API will reject all requests. "
-                "Check your LICENSE_KEY and Supabase configuration."
-            )
+        if is_drive_authorized():
+            status = await validate_license(settings.license_key)
+            if not status.valid:
+                logger.error(
+                    "LICENSE INVALID — API will reject all requests. "
+                    "Check your LICENSE_KEY and Supabase configuration."
+                )
+            else:
+                exp_info = f", expires {status.expires_at.date()}" if status.expires_at else ""
+                logger.info(f"License valid for: {status.user_name}{exp_info}")
         else:
-            exp_info = f", expires {status.expires_at.date()}" if status.expires_at else ""
-            logger.info(f"License valid for: {status.user_name}{exp_info}")
-
-        # Periodic license revalidation (every 5 minutes)
-        async def _license_revalidation_loop():
-            while True:
-                await asyncio.sleep(300)
-                try:
-                    result = await validate_license(settings.license_key)
-                    if result.valid:
-                        logger.info(f"License revalidation OK ({result.user_name})")
-                    else:
-                        logger.warning("License revalidation FAILED — requests will be rejected")
-                except Exception as e:
-                    logger.warning(f"License revalidation error: {e}")
-
-        license_task = asyncio.create_task(_license_revalidation_loop())
+            logger.info("Drive not authorized yet, skipping initial license validation")
     else:
         logger.error(
             "LICENSE NOT CONFIGURED — set LICENSE_KEY, SUPABASE_URL, and "
@@ -311,8 +301,6 @@ async def lifespan(app: FastAPI):
 
     await stop_telegram_bot()
     cleanup_task.cancel()
-    if license_task:
-        license_task.cancel()
     await app.state.http_client.aclose()
     logger.info("Application shut down")
 
@@ -329,7 +317,7 @@ app = FastAPI(
 
 @app.get("/", response_model=HealthResponse)
 async def health_check():
-    cached = await ensure_valid_license()
+    cached = get_cached_license()
     lic = "valid" if cached.valid else "invalid"
     return HealthResponse(status="ok", version=settings.app_version, license=lic)
 

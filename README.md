@@ -6,15 +6,15 @@ API para gerar cortes virais de videos automaticamente ou manualmente. Processa 
 
 ## Deploy Rapido (Docker)
 
-### 1. Clone e configure
+### 1. Puxe a imagem
 
 ```bash
-git clone <url-do-repo>
-cd api-cortes
-cp .env.example .env
+docker pull fernandofeier/api-cortes:latest
 ```
 
-Edite o `.env`:
+### 2. Configure as variaveis de ambiente
+
+Crie um arquivo `.env` com as seguintes variaveis:
 
 | Variavel | Obrigatorio | Descricao |
 |----------|-------------|-----------|
@@ -25,18 +25,69 @@ Edite o `.env`:
 | `DEEPINFRA_API_KEY` | Nao | Chave DeepInfra para legendas via Whisper (mais preciso). Se vazio, usa Gemini |
 | `MAX_UPLOAD_SIZE_MB` | Nao | Limite de tamanho de video em MB (default: `2000`) |
 
+Exemplo de `.env`:
+```env
+LICENSE_KEY=sua-chave-de-licenca
+GEMINI_API_KEY=AIzaSy...
+APP_BASE_URL=https://api.seudominio.com
+```
+
 > A `LICENSE_KEY` e usada tanto como chave de autenticacao (header `X-API-Key`) quanto como identificador da licenca.
 
-### 2. Configure o Google Drive (OAuth2)
+### 3. Suba o container
+
+**Com Docker Compose** (recomendado):
+
+Crie um `docker-compose.yml`:
+
+```yaml
+services:
+  api:
+    image: fernandofeier/api-cortes:latest
+    container_name: api-cortes
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./credentials:/app/credentials
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
+```
+
+**Com Docker run:**
+
+```bash
+mkdir -p credentials
+docker run -d \
+  --name api-cortes \
+  --env-file .env \
+  -v $(pwd)/credentials:/app/credentials \
+  -p 8000:8000 \
+  --restart unless-stopped \
+  fernandofeier/api-cortes:latest
+```
+
+Verifique que esta rodando:
+
+```bash
+curl http://localhost:8000/
+# {"status":"ok","version":"1.0.0","license":"valid"}
+```
+
+### 4. Configure o Google Drive (OAuth2)
 
 1. Acesse [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
 2. Crie um projeto e ative a **Google Drive API**
-3. Crie credenciais OAuth2:
-   - **Docker local**: tipo "Desktop app"
-   - **Painel (Easypanel, Coolify, etc)**: tipo "Web application" com redirect URI `{APP_BASE_URL}/auth/drive/callback`
-4. Baixe o JSON
+3. Crie credenciais OAuth2 do tipo **"Web application"**
+4. Adicione como redirect URI: `{APP_BASE_URL}/auth/drive/callback`
+   (ex: `https://api.seudominio.com/auth/drive/callback`)
+5. Baixe o JSON (`client_secret.json`)
 
-**Enviar credenciais via API (paineis sem terminal):**
+**Envie as credenciais via API:**
 
 ```bash
 curl -X POST {APP_BASE_URL}/v1/upload-credentials \
@@ -44,18 +95,11 @@ curl -X POST {APP_BASE_URL}/v1/upload-credentials \
   -F "file=@client_secret.json"
 ```
 
-**Autorizar o Drive:**
+**Autorize o Google Drive no navegador:**
 
-- **Via terminal**: `python3 scripts/auth_drive.py`
-- **Via navegador**: acesse `{APP_BASE_URL}/auth/drive?key=SUA_LICENSE_KEY`
+Acesse no navegador: `{APP_BASE_URL}/auth/drive?key=SUA_LICENSE_KEY`
 
-### 3. Suba o container
-
-```bash
-docker compose up -d --build
-curl http://localhost:8000/
-# {"status":"ok","version":"1.0.0","license":"valid"}
-```
+Faca login com sua conta Google e autorize o acesso. Pronto — o token sera salvo automaticamente.
 
 ---
 
@@ -99,6 +143,7 @@ Corte automatico com IA. Envia um video e recebe os melhores momentos cortados.
     "background_noise": 0.03,
     "ghost_effect": true,
     "dynamic_zoom": true,
+    "face_tracking": true,
     "captions": true,
     "caption_style": "bold"
   }
@@ -127,6 +172,7 @@ Corte manual — voce envia os timestamps, cada clip vira um video separado.
   ],
   "options": {
     "layout": "blur_zoom",
+    "face_tracking": true,
     "captions": true
   }
 }
@@ -160,6 +206,7 @@ Edicao manual — combina multiplos segmentos em **um unico video** com transico
   "options": {
     "layout": "blur_zoom",
     "fade_duration": 1.0,
+    "face_tracking": true,
     "captions": true
   }
 }
@@ -196,7 +243,7 @@ Consulta o status de um job.
 Cancela um job em andamento. O cancelamento e cooperativo — a operacao atual (FFmpeg, download, upload) termina antes do job parar.
 
 ```bash
-curl -X DELETE http://localhost:8000/v1/status/{job_id} \
+curl -X DELETE {APP_BASE_URL}/v1/status/{job_id} \
   -H "X-API-Key: SUA_LICENSE_KEY"
 ```
 
@@ -219,7 +266,7 @@ curl -X DELETE http://localhost:8000/v1/status/{job_id} \
 Forca revalidacao imediata da licenca contra o servidor. Util apos alteracoes na licenca.
 
 ```bash
-curl -X POST http://localhost:8000/v1/revalidate \
+curl -X POST {APP_BASE_URL}/v1/revalidate \
   -H "X-API-Key: SUA_LICENSE_KEY"
 ```
 
@@ -239,7 +286,7 @@ curl -X POST http://localhost:8000/v1/revalidate \
 Envia o `client_secret.json` do Google OAuth via API.
 
 ```bash
-curl -X POST http://localhost:8000/v1/upload-credentials \
+curl -X POST {APP_BASE_URL}/v1/upload-credentials \
   -H "X-API-Key: SUA_LICENSE_KEY" \
   -F "file=@client_secret.json"
 ```
@@ -269,6 +316,7 @@ Disponiveis em todos os endpoints via campo `options`:
 | `background_noise` | float | 0.0 | Volume de ruido rosa de fundo (0.03 = 3%) |
 | `ghost_effect` | bool | false | Pulso de brilho periodico para quebrar fingerprint temporal |
 | `dynamic_zoom` | bool | false | Zoom pulsante sutil (0-2%) para alterar fingerprint espacial |
+| `face_tracking` | bool | false | Rastreamento facial para manter rostos centralizados no crop vertical |
 | `captions` | bool | false | Gerar legendas automaticas (burned-in) |
 | `caption_style` | string | `classic` | Estilo visual das legendas: `classic`, `bold`, `box` |
 
@@ -280,6 +328,14 @@ Disponiveis em todos os endpoints via campo `options`:
 | `vertical` | Corte vertical simples do centro, sem blur |
 | `horizontal` | Mantem o formato original do video |
 | `blur` | Fundo blur + video original centralizado (sem zoom) |
+
+### Face Tracking (`face_tracking: true`)
+
+Quando ativado, o sistema detecta rostos no video e ajusta o crop vertical dinamicamente para manter o rosto centralizado. Ideal para podcasts e videos com apresentadores.
+
+- Funciona nos layouts `vertical` e `blur_zoom`
+- Usa MediaPipe para deteccao facial com suavizacao de camera (sem pulos bruscos)
+- Se nenhum rosto for encontrado, usa o crop centralizado padrao
 
 ### Legendas (`captions: true`)
 
